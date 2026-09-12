@@ -18,27 +18,38 @@ def install(
         False,
         "--global",
         "-g",
-        help="Install Claude Code entry skill + agents to ~/.claude/ so /hyperresearch works in every Claude Code session anywhere. Skips vault init, CLAUDE.md, and the 16 step skills (those happen per-project on first /hyperresearch run).",
+        help="Install the entry skill + agents into each harness's user-level dir (~/.claude/, ~/.omp/agent/, ~/.pi/agent/) so the pipeline is available in every session anywhere. Skips vault init, the context file, and the 18 step skills (those happen per-project on first run).",
     ),
     steps_only: bool = typer.Option(
         False,
         "--steps-only",
-        help="Install only the 16 step skills to <PATH>/.claude/skills/. Used internally by the entry skill bootstrap on first /hyperresearch invocation in a project. Not normally invoked by users.",
+        help="Install only the 18 step skills into the harness's project skills dir. Used internally by the entry skill bootstrap on the first run in a project. Not normally invoked by users.",
     ),
     profile: str | None = typer.Option(
         None,
         "--profile",
         help="Pipeline profile to render skill/agent prompts from (built-in gears: full, premier; plus any [profile.*] defined in .hyperresearch/config.toml). Defaults to the gear persisted by `hyperresearch profile use` (or 'full'). See `hyperresearch profile list`.",
     ),
+    harness: list[str] | None = typer.Option(
+        None,
+        "--harness",
+        "-H",
+        help="Harnesses to install into: claude, omp, pi, or all (repeatable, comma-separated ok). Default: the vault's [harness] targets, else autodetected from the project and user config dirs. An explicit choice is persisted for later installs.",
+    ),
 ) -> None:
-    """Install hyperresearch: init vault + inject CLAUDE.md + install Claude Code hooks."""
+    """Install hyperresearch: init vault + inject the context file + install harness skills/agents."""
     import sys
 
+    from hyperresearch.cli._harness import (
+        harness_ids,
+        harness_labels,
+        persist_harness_targets,
+        resolve_cli_harnesses,
+    )
     from hyperresearch.core.hooks import (
-        _install_hyperresearch_step_skills,
-        _set_render_state,
         install_global_hooks,
         install_hooks,
+        install_step_skills,
     )
     from hyperresearch.core.profiles import ProfileError
     from hyperresearch.core.vault import Vault, VaultError
@@ -67,36 +78,47 @@ def install(
                 console.print(f"[red]Error:[/] {e}")
             raise typer.Exit(1)
 
-    # Steps-only path: lazy install of the 16 step skills to a project's
-    # .claude/skills/. Called by the entry skill's bootstrap on first
-    # /hyperresearch in a project (after a global install). Cheap no-op
-    # on subsequent invocations.
+    # Steps-only path: lazy install of the 18 step skills into the harness's
+    # project skills dir. Called by the entry skill's bootstrap on the first
+    # run in a project (after a global install). Cheap no-op on subsequent
+    # invocations.
     if steps_only:
         target = Path(path).resolve()
         steps_config = target / ".hyperresearch" / "config.toml"
         steps_config_path = steps_config if steps_config.exists() else None
         steps_profile = _default_profile(steps_config_path)
         _check_profile(steps_profile, steps_config_path)
-        _set_render_state(steps_profile, steps_config_path)
-        result = _install_hyperresearch_step_skills(target)
+        targets = resolve_cli_harnesses(
+            harness, root=target, config_path=steps_config_path, json_output=json_output
+        )
+        actions = install_step_skills(target, profile=steps_profile, harnesses=targets)
+        dirs = ", ".join(f"{target}/{h.skills_rel}" for h in targets)
         if json_output:
             output(
-                success({"steps_installed": result, "target": str(target)}, vault=None),
+                success(
+                    {
+                        "steps_installed": actions,
+                        "target": str(target),
+                        "harnesses": harness_ids(targets),
+                    },
+                    vault=None,
+                ),
                 json_mode=True,
             )
             return
-        if result:
-            console.print(f"[green]Step skills installed:[/] {target}/.claude/skills/")
-            console.print(f"  {result}")
+        if actions:
+            console.print(f"[green]Step skills installed:[/] {dirs}")
+            for action in actions:
+                console.print(f"  {action}")
         else:
-            console.print(f"[dim]Step skills already installed at {target}/.claude/skills/[/]")
+            console.print(f"[dim]Step skills already installed at {dirs}[/]")
         return
 
-    # Global install path: only the user-level Claude Code entry skill +
-    # agents. No vault, no CLAUDE.md, no step skills — pure "make the
-    # slash command available everywhere" mode. Step skills install
-    # per-project, lazily, when the entry skill bootstrap calls
-    # `hyperresearch install --steps-only .` on first invocation.
+    # Global install path: only the user-level entry skill + agents. No vault,
+    # no context file, no step skills — pure "make the pipeline available
+    # everywhere" mode. Step skills install per-project, lazily, when the
+    # entry skill bootstrap calls `hyperresearch install --steps-only .` on
+    # the first run there.
     if global_install:
         from hyperresearch.core.agent_docs import _resolve_executable
 
@@ -104,30 +126,40 @@ def install(
         home = Path.home()
         global_profile = profile if profile is not None else "full"
         _check_profile(global_profile, None)
-        hook_actions = install_global_hooks(home, hpr_path=hpr_path, profile=global_profile)
+        targets = resolve_cli_harnesses(harness, json_output=json_output)
+        hook_actions = install_global_hooks(
+            home, hpr_path=hpr_path, profile=global_profile, harnesses=targets
+        )
 
         if json_output:
             output(
                 success(
-                    {"global": True, "home": str(home), "hooks_installed": hook_actions},
+                    {
+                        "global": True,
+                        "home": str(home),
+                        "hooks_installed": hook_actions,
+                        "harnesses": harness_ids(targets),
+                    },
                     vault=None,
                 ),
                 json_mode=True,
             )
             return
 
-        console.print(f"[green]Global install:[/] {home}/.claude/")
+        roots = ", ".join(str(h.global_root(home)) for h in targets)
+        console.print(f"[green]Global install ({harness_labels(targets)}):[/] {roots}")
         if hook_actions:
             for action in hook_actions:
                 console.print(f"  {action}")
         else:
             console.print("[dim]All skills and agents already installed.[/]")
+        commands = ", ".join(sorted({h.invoke_command for h in targets}))
         console.print(
-            "\n[bold]Ready.[/] /hyperresearch is now available in every Claude Code session."
+            f"\n[bold]Ready.[/] {commands} is now available in every session."
         )
         console.print(
-            "[dim]On first /hyperresearch run in a project, the vault, research/ folder, "
-            "and the 16 step skills are created in that project's .claude/.[/]"
+            "[dim]On the first run in a project, the vault, research/ folder, "
+            "and the 18 step skills are created in that project.[/]"
         )
         return
 
@@ -139,16 +171,26 @@ def install(
     if is_new and is_interactive:
         from hyperresearch.cli.setup import setup
 
-        setup(path=path, json_output=False)
+        setup(path=path, json_output=False, harness=harness)
         return
 
-    # Step 1: Init vault (skip if already exists)
+    # Step 1: Resolve the harnesses first — the vault's context file depends
+    # on them, so a `--harness omp` install must not leave a stray CLAUDE.md.
+    from hyperresearch.core.agent_docs import _resolve_executable, inject_agent_docs
+
+    project_config = root / ".hyperresearch" / "config.toml"
+    project_config_path = project_config if project_config.exists() else None
+    targets = resolve_cli_harnesses(
+        harness, root=root, config_path=project_config_path, json_output=json_output
+    )
+
+    # Step 2: Init vault (skip if already exists)
     try:
         vault = Vault.discover(root)
         vault_action = "existing"
     except VaultError:
         try:
-            vault = Vault.init(root, name=name)
+            vault = Vault.init(root, name=name, harnesses=targets)
             vault_action = "created"
         except VaultError as e:
             if json_output:
@@ -157,29 +199,31 @@ def install(
                 console.print(f"[red]Error:[/] {e}")
             raise typer.Exit(1)
 
-    # Step 2: Resolve the hyperresearch executable path
-    from hyperresearch.core.agent_docs import _resolve_executable, inject_agent_docs
-
+    # Step 3: Persist an explicit harness choice so later bare installs keep
+    # targeting the same ones, and resolve the hyperresearch executable path.
+    persist_harness_targets(vault.config_path, harness)
     hpr_path = _resolve_executable()
 
-    # Step 3: Always re-inject CLAUDE.md (updates blurb + path)
-    doc_actions = inject_agent_docs(root)
+    # Step 4: Always re-inject each harness's context file (blurb + CLI path)
+    doc_actions = inject_agent_docs(root, harnesses=targets)
 
-    # Step 4: Install Claude Code hook + skills + subagents (rendered from the
-    # gear profile — explicit --profile, else the gear persisted in config)
-    project_config = root / ".hyperresearch" / "config.toml"
-    project_config_path = project_config if project_config.exists() else None
-    project_profile = _default_profile(project_config_path)
-    _check_profile(project_profile, project_config_path)
-    hook_actions = install_hooks(root, hpr_path=hpr_path, profile=project_profile)
+    # Step 5: Install each harness's skills + subagents + reminder (rendered
+    # from the gear profile — explicit --profile, else the gear in config)
+    profile_config_path = vault.config_path if vault.config_path.exists() else None
+    project_profile = _default_profile(profile_config_path)
+    _check_profile(project_profile, profile_config_path)
+    hook_actions = install_hooks(
+        root, hpr_path=hpr_path, profile=project_profile, harnesses=targets
+    )
 
-    # Step 3: Auto-configure crawl4ai if installed
+    # Step 6: Auto-configure crawl4ai if installed
     crawl4ai_status = _setup_crawl4ai(vault)
 
-    # Step 5: Report
+    # Step 7: Report
     data = {
         "vault_path": str(vault.root),
         "vault": vault_action,
+        "harnesses": harness_ids(targets),
         "agent_docs": doc_actions,
         "hooks_installed": hook_actions,
         "crawl4ai": crawl4ai_status,
@@ -192,6 +236,8 @@ def install(
             console.print(f"[green]Vault created:[/] {vault.root}")
         else:
             console.print(f"[dim]Vault exists:[/] {vault.root}")
+
+        console.print(f"[green]Harnesses:[/] {harness_labels(targets)}")
 
         if doc_actions:
             console.print("[green]Agent docs:[/]")

@@ -101,6 +101,10 @@ app.command("watch")(_watch)
 app.command("serve")(_serve)
 app.command("mcp")(_mcp)
 
+from hyperresearch.cli.spawn import spawn as _spawn
+
+app.command("spawn")(_spawn)
+
 # Sub-apps
 from hyperresearch.cli.batch import app as batch_app
 from hyperresearch.cli.config_cmd import app as config_app

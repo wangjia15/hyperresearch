@@ -78,5 +78,5 @@ You need the `## Committed position` section from every interim note in your con
 Return to the entry skill (`hyperresearch`). Invoke step 7:
 
 ```
-Skill(skill: "hyperresearch-7-source-tensions")
+<< h.load_skill("hyperresearch-7-source-tensions") >>
 ```

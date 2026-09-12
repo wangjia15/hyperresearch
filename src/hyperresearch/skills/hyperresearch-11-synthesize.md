@@ -149,7 +149,7 @@ Spawn ONE `hyperresearch-synthesizer` subagent. Single spawn, runs once.
 
 **Spawn template:**
 ```
-subagent_type: hyperresearch-synthesizer
+<< h.spawn_key >>: hyperresearch-synthesizer
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste research/runs/<vault_tag>/query.md body}}
@@ -257,5 +257,5 @@ After this step, the final report is only modified by Edit hunks from the patche
 Return to the entry skill (`hyperresearch`). Invoke step 12:
 
 ```
-Skill(skill: "hyperresearch-12-critics")
+<< h.load_skill("hyperresearch-12-critics") >>
 ```

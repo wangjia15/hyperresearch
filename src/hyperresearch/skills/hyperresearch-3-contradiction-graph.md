@@ -70,4 +70,4 @@ If no claims files exist (e.g., fetchers didn't produce them), skip this step en
 
 Return to the entry skill (`hyperresearch`). Tier-based routing:
 
-- **full tier:** Invoke `Skill(skill: "hyperresearch-4-loci-analysis")`
+- **full tier:** Invoke `<< h.load_skill("hyperresearch-4-loci-analysis") >>`

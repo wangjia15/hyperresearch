@@ -36,7 +36,7 @@ Spawn ONE `hyperresearch-readability-recommender` subagent. Single spawn, runs o
 
 **Spawn template:**
 ```
-subagent_type: hyperresearch-readability-recommender
+<< h.spawn_key >>: hyperresearch-readability-recommender
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste research/runs/<vault_tag>/query.md body}}

@@ -4,7 +4,10 @@ Pre-4.0, a URL that hit a login wall, bot block, or junk gate was discarded;
 at dissertation scale that's dozens of silently lost sources per run. Now the
 fetch engine ENQUEUES the blocked URL here, and the `hyperresearch-
 browser-fetcher` agent drains the queue by driving the user's real Chrome
-browser (via Claude-in-Chrome) — one tab at a time, serial, precious.
+browser through whatever lane the harness has (Claude-in-Chrome on Claude
+Code, the `eval` tool's relay browser on OMP) — one tab at a time, serial,
+precious. On a harness with no browser lane the queue accumulates instead,
+which is still strictly better than discarding the URL.
 
 The queue lives in the vault DB (`escalations` table) rather than a JSON
 file: parallel fetcher waves enqueue concurrently, and SQLite gives atomic

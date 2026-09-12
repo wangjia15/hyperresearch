@@ -4,8 +4,8 @@ description: >
   Step 12 of the hyperresearch V8 pipeline. Spawns 4 adversarial critics
   in parallel against the synthesized final report from step 11. Each
   critic produces an independent findings JSON that the patcher (step 14)
-  consumes. Critics never modify the draft directly. Invoked via Skill
-  tool from the entry skill (full tier only).
+  consumes. Critics never modify the draft directly. Invoked <% if h.supports("skill") %>via Skill
+  tool <% endif %>from the entry skill (full tier only).
 ---
 
 # Step 12 — Adversarial critique (parallel critics)
@@ -28,7 +28,7 @@ Read these inputs:
 
 ## Procedure
 
-1. **Spawn all 4 critics in parallel.** In ONE message:
+1. **Spawn all 4 critics in parallel.** <% if h.has_subagents %>In ONE message:<% else %>In ONE `hyperresearch spawn --batch` call:<% endif %>
    - `hyperresearch-dialectic-critic` → `research/runs/<vault_tag>/critic-findings-dialectic.json` (counter-evidence the draft missed or straw-manned)
    - `hyperresearch-depth-critic` → `research/runs/<vault_tag>/critic-findings-depth.json` (shallow spots where interim notes could fill substance)
    - `hyperresearch-width-critic` → `research/runs/<vault_tag>/critic-findings-width.json` (corpus clusters the draft ignores despite evidence)
@@ -36,7 +36,7 @@ Read these inputs:
 
 2. **Pass each critic** (standard 3-piece contract):
    ```
-   subagent_type: hyperresearch-<critic-name>-critic
+   << h.spawn_key >>: hyperresearch-<critic-name>-critic
    prompt: |
      RESEARCH QUERY (verbatim, gospel):
      > {{paste research/runs/<vault_tag>/query.md body}}
@@ -75,5 +75,5 @@ Read these inputs:
 Return to the entry skill (`hyperresearch`). Invoke step 13:
 
 ```
-Skill(skill: "hyperresearch-13-gap-fetch")
+<< h.load_skill("hyperresearch-13-gap-fetch") >>
 ```

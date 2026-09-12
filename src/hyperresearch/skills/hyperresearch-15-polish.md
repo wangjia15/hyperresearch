@@ -42,7 +42,7 @@ Spawn ONCE.
 
 **Spawn template:**
 ```
-subagent_type: hyperresearch-polish-auditor
+<< h.spawn_key >>: hyperresearch-polish-auditor
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste research/runs/<vault_tag>/query.md body}}
@@ -160,7 +160,7 @@ The final report lives at `research/notes/final_report_<vault_tag>.md`. The wrap
 Return to the entry skill (`hyperresearch`). Invoke step 16:
 
 ```
-Skill(skill: "hyperresearch-16-readability-audit")
+<< h.load_skill("hyperresearch-16-readability-audit") >>
 ```
 
 Step 16 is the final step — readability audit + selective apply. Runs for ALL tiers.

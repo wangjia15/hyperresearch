@@ -97,5 +97,5 @@ This artifact feeds directly into step 10's mandatory Source Tensions section. E
 Return to the entry skill (`hyperresearch`). Invoke step 8:
 
 ```
-Skill(skill: "hyperresearch-8-corpus-critic")
+<< h.load_skill("hyperresearch-8-corpus-critic") >>
 ```

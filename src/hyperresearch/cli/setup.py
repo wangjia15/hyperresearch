@@ -18,12 +18,20 @@ console = Console()
 def setup(
     path: str = typer.Argument(".", help="Path to set up"),
     json_output: bool = typer.Option(False, "--json", "-j", help="JSON output (non-interactive)"),
+    harness: list[str] | None = typer.Option(
+        None,
+        "--harness",
+        "-H",
+        help="Harnesses to install into: claude, omp, pi, or all (repeatable, comma-separated ok). Default: autodetected.",
+    ),
 ) -> None:
     """Interactive setup — configure hyperresearch step by step."""
     if json_output or not sys.stdin.isatty():
         import subprocess
 
         cmd = [sys.executable, "-m", "hyperresearch", "install", path]
+        for value in harness or []:
+            cmd += ["--harness", value]
         if json_output:
             cmd.append("--json")
         raise typer.Exit(subprocess.call(cmd))
@@ -117,16 +125,31 @@ def setup(
     console.print(Rule("[bold]Setting up", style="green"))
     console.print()
 
+    from hyperresearch.cli._harness import (
+        harness_labels,
+        persist_harness_targets,
+        resolve_cli_harnesses,
+    )
     from hyperresearch.core.agent_docs import _resolve_executable, inject_agent_docs
     from hyperresearch.core.hooks import install_hooks
     from hyperresearch.core.vault import Vault, VaultError
+
+    # Resolve the harnesses before the vault exists: its context file is one
+    # of theirs, so a `--harness omp` setup must not write a stray CLAUDE.md.
+    existing_config = root / ".hyperresearch" / "config.toml"
+    targets = resolve_cli_harnesses(
+        harness,
+        root=root,
+        config_path=existing_config if existing_config.exists() else None,
+    )
+    console.print(f"  [green]Harnesses:[/] {harness_labels(targets)}")
 
     # Init vault
     try:
         vault = Vault.discover(root)
         console.print(f"  [dim]Vault:[/] {vault.root}")
     except VaultError:
-        vault = Vault.init(root, name=vault_name)
+        vault = Vault.init(root, name=vault_name, harnesses=targets)
         console.print(f"  [green]Vault created:[/] {vault.root}")
 
     # Write config — magic always on when crawl4ai is used
@@ -137,15 +160,22 @@ def setup(
     vault.config.name = vault_name
     vault.config.save(vault.config_path)
 
-    # Inject CLAUDE.md
+    persist_harness_targets(vault.config_path, harness)
+
+    # Inject each harness's context file
     hpr_path = _resolve_executable()
-    doc_actions = inject_agent_docs(root)
+    doc_actions = inject_agent_docs(root, harnesses=targets)
     for action in doc_actions:
         console.print(f"  [green]Docs:[/] {action}")
 
-    # Install Claude Code hook + skills + subagents (rendered from the
+    # Install each harness's skills + subagents + reminder (rendered from the
     # persisted scale gear, if one was chosen via `hpr profile use`)
-    hook_actions = install_hooks(root, hpr_path=hpr_path, profile=vault.config.pipeline_profile)
+    hook_actions = install_hooks(
+        root,
+        hpr_path=hpr_path,
+        profile=vault.config.pipeline_profile,
+        harnesses=targets,
+    )
     for action in hook_actions:
         console.print(f"  [green]Hook:[/] {action}")
     if not hook_actions:
@@ -165,7 +195,7 @@ def setup(
     summary.add_row("Provider", f"[bold]{provider}[/]")
     summary.add_row("Profile", f"[bold]{profile_desc}[/]")
     summary.add_row("Stealth", "[bold]on[/]" if magic else "[dim]off[/]")
-    summary.add_row("Platform", "[bold]Claude Code[/]")
+    summary.add_row("Harnesses", f"[bold]{harness_labels(targets)}[/]")
     summary.add_row("CLI", f"[dim]{hpr_path}[/]")
 
     console.print(

@@ -13,7 +13,6 @@ import pytest
 from hyperresearch.core.hooks import (
     _RETIRED_AGENT_FILES,
     _RETIRED_SKILL_DIRS,
-    _install_claude_hook,
     _install_depth_critic_agent,
     _install_depth_investigator_agent,
     _install_dialectic_critic_agent,
@@ -22,6 +21,7 @@ from hyperresearch.core.hooks import (
     _install_loci_analyst_agent,
     _install_patcher_agent,
     _install_polish_auditor_agent,
+    _install_reminder_hook,
     _install_researcher_agent,
     _install_source_analyst_agent,
     _install_width_critic_agent,
@@ -500,7 +500,7 @@ def test_installed_hook_command_keeps_the_script_path_in_one_argument(tmp_path):
     project = tmp_path / "my project"
     project.mkdir()
 
-    _install_claude_hook(project, "hyperresearch")
+    _install_reminder_hook(project, "hyperresearch")
 
     settings = json.loads((project / ".claude" / "settings.json").read_text(encoding="utf-8"))
     command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]

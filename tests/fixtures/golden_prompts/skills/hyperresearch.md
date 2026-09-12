@@ -16,10 +16,21 @@ description: >
 You are the orchestrator. Your entire job in this conversation is:
 1. Read this file once at the start.
 2. Bootstrap canonical inputs (research_query, vault_tag, scaffold).
-3. Invoke each step skill in sequence via the `Skill` tool.
-4. Between steps, do nothing except mark todos and (optionally) think to `research/runs/<vault_tag>/temp/orchestrator-notes.md`.
+3. Invoke each step skill in sequence (`Skill(skill: "hyperresearch-N-stepname")`).
+4. Between steps, do nothing except record your position and (optionally) think to `research/runs/<vault_tag>/temp/orchestrator-notes.md`.
 
 You do NOT do the work of any step yourself. The step skills do. You just sequence them.
+
+---
+
+## This copy runs on Claude Code
+
+The installer renders the pipeline for one harness. On this one:
+
+- **Start a run:** `/hyperresearch <query>`
+- **Load a step skill:** `Skill(skill: "hyperresearch-N-stepname")`
+- **Spawn a subagent:** `Task(subagent_type: "<agent>", prompt: "<the block below>")` — agent prompts live in `.claude/agents/hyperresearch-*.md`
+- **Fan out a wave:** Spawn a wave by issuing N Task calls in ONE message — they run concurrently. Sequential messages run serially and waste wall time.
 
 ---
 
@@ -31,7 +42,7 @@ Each pipeline step is its own skill file. To run a step:
 Skill(skill: "hyperresearch-N-stepname")
 ```
 
-When you invoke a Skill, that skill's full procedure is loaded into your context **fresh**. You then execute that step's procedure, hit its exit criterion, and return to the entry skill (this file) to invoke the next step.
+Loading a step skill puts that skill's full procedure into your context **fresh**. You then execute that step's procedure, hit its exit criterion, and return to the entry skill (this file) to load the next step.
 
 **Why this design?** Context compaction. V7 was one 1200-line skill that got compacted away by the time Layer 4 needed its triple-draft procedure. The orchestrator forgot the procedure, wrote a single draft, and produced a flat-scoring report. V8 fixes this at the source: each step's procedure is loaded into context **only at the moment it's needed**, fresh, with no eviction risk.
 
@@ -84,7 +95,7 @@ Before you invoke any step skill, do this:
 
 0. **Auto-init if missing.** Two checks for the first-run-after-global-install case:
    - **Vault check.** If `.hyperresearch/` doesn't exist in the working directory, run `hyperresearch init . --json`. Creates the SQLite vault and `research/` directory.
-   - **Step-skills check.** If `.claude/skills/hyperresearch-1-decompose/SKILL.md` doesn't exist relative to the working directory, run `hyperresearch install --steps-only . --json`. Installs the 16 step skill files needed by `Skill(skill: "hyperresearch-N-...")` calls in later steps.
+   - **Step-skills check.** If `.claude/skills/hyperresearch-1-decompose/SKILL.md` doesn't exist relative to the working directory, run `hyperresearch install --steps-only . --harness claude --json`. Installs the 18 step skill files needed by the `Skill(skill: "hyperresearch-N-...")` calls in later steps.
 
    If either command fails because the binary isn't on PATH, tell the user to run `pip install hyperresearch` first. If both files already exist, both commands no-op cheaply — safe to run unconditionally.
 
@@ -162,7 +173,15 @@ Blocked fetches (login walls, bot walls, captchas) are queued, not lost: `$HPR e
 1. **CAPTCHAs / logins / 2FA are ALWAYS the human's.** The browser-fetcher marks them `needs_human`; you consolidate ALL of them into ONE message to the user at a natural pause point (never one interruption per URL). In non-interactive runs, `$HPR run block <vault_tag> --on human-challenges` and continue with everything else.
 2. **One browser-fetcher at a time.** It's the user's actual browser — parallel instances are chaos. Check the queue again after step 13 (gap-fetch) if new fetches got blocked.
 
-## Subagent spawn contract (applies to every Task call)
+## Subagent spawn contract (applies to every spawn)
+
+On this harness you spawn with:
+
+```
+Task(subagent_type: "<agent>", prompt: "<the block below>")
+```
+
+Spawn a wave by issuing N Task calls in ONE message — they run concurrently. Sequential messages run serially and waste wall time.
 
 When a step skill instructs you to spawn a subagent, the prompt you pass MUST include three pieces near the top:
 
@@ -174,7 +193,7 @@ When a step skill instructs you to spawn a subagent, the prompt you pass MUST in
 
 4. **The run's shim file, pasted VERBATIM.** Step 1 renders posture shims (register / domain notes / inference depth) to `research/runs/<vault_tag>/shims/{research,drafting,critics,polish}.md`. Each step skill's spawn template names which shim its subagents receive; append that file's FULL contents to the end of the spawn prompt, unedited. You never write, summarize, or trim shim text — the file is the single source of truth. The cite-checker receives NO shim (verification is register-independent). If the shims directory is missing, run `$HPR levers render <vault_tag> -j` before spawning.
 
-Skipping any of these in a Task prompt is a process violation.
+Skipping any of these in a spawn prompt is a process violation.
 
 ---
 

@@ -124,19 +124,39 @@ def config_get(
 @app.command("agent-docs")
 def config_agent_docs(
     json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    harness: list[str] | None = typer.Option(
+        None,
+        "--harness",
+        "-H",
+        help="Harnesses whose context files to refresh: claude, omp, pi, or all. Default: the vault's [harness] targets, else autodetected.",
+    ),
 ) -> None:
-    """Update CLAUDE.md with the latest hyperresearch blurb."""
+    """Refresh each harness's context file (CLAUDE.md / AGENTS.md) with the latest blurb."""
+    from hyperresearch.cli._harness import resolve_cli_harnesses
     from hyperresearch.core.agent_docs import inject_agent_docs
     from hyperresearch.core.vault import Vault
 
     vault = Vault.discover()
-    modified = inject_agent_docs(vault.root)
+    targets = resolve_cli_harnesses(
+        harness,
+        root=vault.root,
+        config_path=vault.config_path,
+        json_output=json_output,
+    )
+    modified = inject_agent_docs(vault.root, harnesses=targets)
 
     if json_output:
-        output(success({"modified": modified}, vault=str(vault.root)), json_mode=True)
+        output(
+            success(
+                {"modified": modified, "harnesses": [h.id for h in targets]},
+                vault=str(vault.root),
+            ),
+            json_mode=True,
+        )
     else:
         if modified:
             for m in modified:
                 console.print(f"  [green]{m}[/]")
         else:
-            console.print("[dim]CLAUDE.md already up to date.[/]")
+            files = ", ".join(sorted({h.context_file for h in targets}))
+            console.print(f"[dim]{files} already up to date.[/]")

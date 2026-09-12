@@ -15,8 +15,14 @@ def repair(
     enrich: bool = typer.Option(True, "--enrich/--no-enrich", help="Auto-tag and auto-summarize notes"),
     promote_notes: bool = typer.Option(True, "--promote/--no-promote", help="Auto-promote qualifying notes"),
     rebuild_index: bool = typer.Option(True, "--index/--no-index", help="Rebuild index pages"),
-    update_docs: bool = typer.Option(True, "--docs/--no-docs", help="Update CLAUDE.md"),
+    update_docs: bool = typer.Option(True, "--docs/--no-docs", help="Update the harness context files (CLAUDE.md / AGENTS.md)"),
     json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    harness: list[str] | None = typer.Option(
+        None,
+        "--harness",
+        "-H",
+        help="Harnesses whose context files to refresh: claude, omp, pi, or all. Default: the vault's [harness] targets, else autodetected.",
+    ),
 ) -> None:
     """Repair and rebuild the vault — full sync, fix broken links, promote notes, rebuild indexes."""
     from hyperresearch.core.vault import Vault, VaultError
@@ -237,8 +243,16 @@ def repair(
     if update_docs:
         if not json_output:
             console.print("[bold]6/6 Updating agent docs...[/]")
+        from hyperresearch.cli._harness import resolve_cli_harnesses
         from hyperresearch.core.agent_docs import inject_agent_docs
-        modified = inject_agent_docs(vault.root)
+        targets = resolve_cli_harnesses(
+            harness,
+            root=vault.root,
+            config_path=vault.config_path,
+            json_output=json_output,
+        )
+        modified = inject_agent_docs(vault.root, harnesses=targets)
+        report["harnesses"] = [h.id for h in targets]
         report["agent_docs"] = modified
         if not json_output:
             if modified:

@@ -1,16 +1,24 @@
-"""Agent documentation integration — inject the hyperresearch blurb into CLAUDE.md.
+"""Agent documentation integration — the project context file each harness reads.
 
-hyperresearch is a Claude Code harness. This module writes/updates CLAUDE.md
-at the vault root so Claude Code auto-loads the research workflow on every
-session. Pre-existing AGENTS.md / GEMINI.md / .github/copilot-instructions.md
-files (from older hyperresearch vaults or other tools) are left alone — we
-don't delete user content, but we no longer generate them either.
+Claude Code auto-loads `CLAUDE.md`; OMP and Pi auto-load the project's
+`AGENTS.md`. This module writes/updates the file(s) of the harnesses being
+installed, so the research workflow is in context on every session. The
+harness-specific sentences (how a run starts, where the entry skill lives,
+how skills load, which web tools exist, how subagents spawn) are rendered
+for the harnesses that share the file.
+
+Files belonging to other tools (GEMINI.md, .github/copilot-instructions.md)
+are left alone — we don't delete user content, and we no longer generate
+them either.
 """
 
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
+
+from hyperresearch.core.harnesses import CLAUDE, Harness
 
 HYPERRESEARCH_SECTION_MARKER = "<!-- hyperresearch:start -->"
 HYPERRESEARCH_SECTION_END = "<!-- hyperresearch:end -->"
@@ -27,11 +35,11 @@ This project uses hyperresearch as an agent-driven research knowledge base. The 
 
 ### How to do research
 
-**Run a research session with `/hyperresearch <query>`.** This invokes the V8 16-step pipeline. The entry skill at `.claude/skills/hyperresearch/SKILL.md` is a thin ROUTER. The step procedures live in their own skills (`hyperresearch-1-decompose` through `hyperresearch-16-readability-audit`, plus half-steps `1-5-chapter-partition` and `14-5-cite-check`) and are loaded fresh into context via the `Skill` tool when each step runs. This solves V7's context-compaction problem: each step's procedure lands in context only when needed. Read the entry skill before you start a research session; it explains the chain mechanics.
+**Run a research session with `{run_cmd}`.** This invokes the V8 16-step pipeline. The entry skill at {entry_skill} is a thin ROUTER. The step procedures live in their own skills (`hyperresearch-1-decompose` through `hyperresearch-16-readability-audit`, plus half-steps `1-5-chapter-partition` and `14-5-cite-check`) and are loaded fresh into context {skill_load} when each step runs. This solves V7's context-compaction problem: each step's procedure lands in context only when needed. Read the entry skill before you start a research session; it explains the chain mechanics.
 
 Step 1 classifies the query into a tier (`light` or `full`; `dissertation` is opt-in per run, never auto-classified) and the rest of the pipeline scales accordingly — short bounded queries skip the depth investigations, critics, and patcher (~30-40 min); argumentative deep-research queries run all 16 steps with adversarial review; dissertation runs loop steps 2-10 per chapter. Orthogonal to tiers, the installed **scale gear** (`full` ~55-80 sources, or `premier` ~100-130 sources with doubled depth budget) sets the numbers rendered into the step skills — the user switches it with `{hpr} profile use <full|premier>`; inspect with `{hpr} profile list -j`.
 
-**Do NOT use WebFetch for source pages** — use `{hpr} fetch` instead. The skill files explain when to fetch vs. search.
+{web_line}
 
 ### Run management and verification
 
@@ -52,7 +60,7 @@ The skill files own everything about how to research. That includes:
 - The pipeline phases and what each phase does
 - Which subagents exist and what each one is for (fetcher, source-analyst, loci-analyst, depth-investigator, corpus-critic, draft-orchestrators, synthesizer, 4 critics, patcher, cite-checker, polish-auditor, readability-recommender, browser-fetcher)
 - The tool-lock invariant (patcher and polish-auditor can only Read + Edit, never Write)
-- The subagent spawn contract (every Task call passes the verbatim research_query + pipeline position + inputs)
+- The subagent spawn contract ({spawn_line})
 - Artifact locations — everything run-scoped lives under `research/runs/<vault_tag>/` (scaffold.md, prompt-decomposition.json, loci.json, comparisons.md, critic findings, patch / polish logs); final reports at `research/notes/final_report_<vault_tag>.md`
 - The curation pass after every research session
 
@@ -229,30 +237,107 @@ def _resolve_executable() -> str:
     return "hyperresearch"
 
 
-def inject_agent_docs(vault_root: Path) -> list[str]:
-    """Inject hyperresearch docs into CLAUDE.md at the vault root.
+def _join_unique(fragments: list[str], sep: str = " ") -> str:
+    """Join fragments, dropping duplicates, preserving order."""
+    seen: list[str] = []
+    for fragment in fragments:
+        if fragment not in seen:
+            seen.append(fragment)
+    return sep.join(seen)
 
-    Always writes/updates CLAUDE.md. Does NOT touch AGENTS.md, GEMINI.md,
-    or .github/copilot-instructions.md — hyperresearch is a Claude Code
-    harness now, not a multi-platform tool. Pre-existing non-Claude doc
-    files are left untouched (we don't delete user content), but no new
-    ones are created.
+
+def _harness_fragments(harnesses: Sequence[Harness], hpr: str) -> dict[str, str]:
+    """The harness-specific sentences of the blurb.
+
+    One context file can serve several harnesses (OMP and Pi both read the
+    project's `AGENTS.md`), so each fragment covers every harness that shares
+    the file rather than assuming one.
     """
+    run_cmd = _join_unique([f"{h.invoke_command} <query>" for h in harnesses], " / ")
+    entry_skill = _join_unique(
+        [f"`{h.skill_rel('hyperresearch')}`" for h in harnesses], " or "
+    )
+    skill_load = _join_unique(
+        [
+            f"via the `{h.tool('skill')}` tool"
+            if h.supports("skill")
+            else f"by reading them (`{h.load_skill('hyperresearch-N-...')}`)"
+            for h in harnesses
+        ],
+        " / ",
+    )
+
+    web_lines = []
+    for h in harnesses:
+        if h.supports("web_search"):
+            web_lines.append(
+                f"**Do NOT fetch source pages with `{h.tool('web_search')}` or any raw web "
+                f"tool** — use `{hpr} fetch` instead. The skill files explain when to "
+                "fetch vs. search."
+            )
+        else:
+            web_lines.append(
+                f"**{h.label} has no web-search tool** — `{hpr} search`, "
+                f"`{hpr} scholar search` and `{hpr} fetch` are the web lanes, which is "
+                "the posture the pipeline wants anyway."
+            )
+    mechanisms = _join_unique(
+        [
+            f"`{h.tool('task')}` call" if h.has_subagents else f"`{hpr} spawn` call"
+            for h in harnesses
+        ],
+        " / ",
+    )
+    spawn_line = (
+        f"every {mechanisms} passes the verbatim research_query + pipeline "
+        "position + inputs"
+    )
+
+    return {
+        "run_cmd": run_cmd,
+        "entry_skill": entry_skill,
+        "skill_load": skill_load,
+        "web_line": _join_unique(web_lines, "\n\n"),
+        "spawn_line": spawn_line,
+    }
+
+
+def inject_agent_docs(
+    vault_root: Path,
+    harnesses: Sequence[Harness] | None = None,
+) -> list[str]:
+    """Inject the hyperresearch blurb into each harness's context file.
+
+    Claude Code reads `CLAUDE.md`; OMP and Pi read the project's `AGENTS.md`.
+    Harnesses that share a file get one file whose harness-specific sentences
+    cover all of them. Other tools' files (GEMINI.md,
+    .github/copilot-instructions.md) are never written or deleted — we don't
+    touch user content we didn't create.
+    """
+    targets = tuple(harnesses) if harnesses else (CLAUDE,)
+
     hpr_path = _resolve_executable()
     # Use forward slashes — bash on Windows eats backslashes
     hpr_path = hpr_path.replace("\\", "/")
-    # No date interpolation here: a `Today is YYYY-MM-DD` line in the
-    # cached prefix would bust Claude Code's prompt cache once per day.
-    blurb = HYPERRESEARCH_BLURB.format(
-        marker=HYPERRESEARCH_SECTION_MARKER,
-        end_marker=HYPERRESEARCH_SECTION_END,
-        hpr=hpr_path,
-    )
+
+    by_file: dict[str, list[Harness]] = {}
+    for harness in targets:
+        by_file.setdefault(harness.context_file, []).append(harness)
 
     modified: list[str] = []
-    result = _inject_into_file(vault_root / "CLAUDE.md", blurb, "CLAUDE.md")
-    if result:
-        modified.append(result)
+    for filename, sharing in by_file.items():
+        fragments = _harness_fragments(sharing, hpr_path)
+        # No date interpolation here: a `Today is YYYY-MM-DD` line in the
+        # cached prefix would bust the harness's prompt cache once per day.
+        blurb = HYPERRESEARCH_BLURB.format(
+            marker=HYPERRESEARCH_SECTION_MARKER,
+            end_marker=HYPERRESEARCH_SECTION_END,
+            hpr=hpr_path,
+            **fragments,
+        )
+        result = _inject_into_file(vault_root / filename, blurb, filename)
+        if result:
+            modified.append(result)
     return modified
 
 

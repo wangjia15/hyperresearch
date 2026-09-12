@@ -13,6 +13,10 @@ Context exposed to templates:
     p          — the primary profile (default: full)
     <name>     — every available profile by name (e.g. `full`, `light`),
                  so tier tables can reference both tiers in one file.
+    h          — the target harness (see core/harnesses.py): tool names,
+                 skill-load and spawn mechanics, install paths. Defaults to
+                 Claude Code, whose rendering is byte-identical to the
+                 pre-harness prompts.
 
 Filters:
     dash    — join a (low, high) range with an en dash (U+2013)
@@ -29,7 +33,8 @@ from pathlib import Path
 
 from jinja2 import Environment, StrictUndefined
 
-from hyperresearch.core.profiles import Profile, list_profiles, resolve_profile
+from hyperresearch.core.harnesses import DEFAULT_HARNESS_ID, Harness, get_harness
+from hyperresearch.core.profiles import list_profiles, resolve_profile
 
 EN_DASH = "–"
 
@@ -64,17 +69,24 @@ def prompt_env() -> Environment:
 def build_render_context(
     config_path: Path | None = None,
     primary: str = "full",
-) -> dict[str, Profile]:
-    """Resolve every available profile; expose each by name plus `p` (primary)."""
+    harness: str | Harness = DEFAULT_HARNESS_ID,
+) -> dict[str, object]:
+    """Resolve every profile plus the target harness.
+
+    Exposes each profile by name, the primary one as `p`, and the harness as
+    `h`. `p`/`h` are assigned last: a user-defined overlay profile with one of
+    those names cannot shadow them.
+    """
     profiles = {name: resolve_profile(name, config_path) for name in list_profiles(config_path)}
     if primary not in profiles:
         # resolve_profile raises a helpful error for unknown names
         profiles[primary] = resolve_profile(primary, config_path)
-    return {"p": profiles[primary], **profiles}
+    target = harness if isinstance(harness, Harness) else get_harness(harness)
+    return {**profiles, "p": profiles[primary], "h": target}
 
 
-def render_prompt(text: str, context: dict[str, Profile]) -> str:
-    """Render one prompt template with the given profile context."""
+def render_prompt(text: str, context: dict[str, object]) -> str:
+    """Render one prompt template with the given profile/harness context."""
     return prompt_env().from_string(text).render(**context)
 
 
@@ -102,3 +114,21 @@ def insert_after_frontmatter(content: str, line: str) -> str:
             if insert_at != -1:
                 return content[: insert_at + 1] + line + "\n" + content[insert_at + 1 :]
     return line + "\n" + content
+
+
+def compact_frontmatter(content: str) -> str:
+    """Drop blank lines from the leading YAML frontmatter block.
+
+    A harness without a stable selector for a model tier renders an empty
+    `model:` line (see `Harness.model_line`), which would otherwise leave a
+    blank line inside the frontmatter — legal YAML, but it also lands inside
+    a preceding folded `description: >` block as a stray newline.
+    """
+    if not content.startswith("---\n"):
+        return content
+    end = content.find("\n---", 3)
+    if end == -1:
+        return content
+    head, rest = content[4:end], content[end:]
+    kept = [line for line in head.split("\n") if line.strip()]
+    return "---\n" + "\n".join(kept) + rest

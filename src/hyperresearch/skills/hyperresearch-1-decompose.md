@@ -205,7 +205,7 @@ Read both before starting. The vault_tag is in the scaffold's "Run config" secti
 Return to the entry skill (`hyperresearch`). Read `research/runs/<vault_tag>/prompt-decomposition.json` to learn the tier, then invoke step 2:
 
 ```
-Skill(skill: "hyperresearch-2-width-sweep")
+<< h.load_skill("hyperresearch-2-width-sweep") >>
 ```
 
 Step 2 runs for ALL tiers.
