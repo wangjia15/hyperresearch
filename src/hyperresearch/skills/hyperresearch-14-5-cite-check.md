@@ -48,7 +48,7 @@ This parses every (sentence, citation) pair from the report — `[N]` markers (i
 Spawn ONE `hyperresearch-cite-checker` subagent (two in parallel with split index ranges when `sampled_for_llm` exceeds ~40 pairs):
 
 ```
-subagent_type: hyperresearch-cite-checker
+<< h.spawn_key >>: hyperresearch-cite-checker
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste research/runs/<vault_tag>/query.md body}}
@@ -94,4 +94,4 @@ Fix repertoire (in the findings' `suggested_fix`): swap to `correct_note_id`, so
 
 ## Next step
 
-Return to the entry skill and invoke `Skill(skill: "hyperresearch-15-polish")`.
+Return to the entry skill and invoke `<< h.load_skill("hyperresearch-15-polish") >>`.

@@ -18,17 +18,34 @@ def init(
     name: str = typer.Option("Research Base", "--name", "-n", help="Vault name"),
     research_dir: str = typer.Option("research", "--dir", "-d", help="Research directory name"),
     json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    harness: list[str] | None = typer.Option(
+        None,
+        "--harness",
+        "-H",
+        help="Harnesses whose context file to write: claude, omp, pi, or all. Default: autodetected.",
+    ),
 ) -> None:
-    """Initialize a new hyperresearch vault (Claude Code integration)."""
+    """Initialize a new hyperresearch vault."""
+    from hyperresearch.cli._harness import resolve_cli_harnesses
     from hyperresearch.core.vault import Vault, VaultError
 
+    root = Path(path).resolve()
+    targets = resolve_cli_harnesses(harness, root=root, json_output=json_output)
+
     try:
-        vault = Vault.init(Path(path).resolve(), name=name, research_dir=research_dir)
-        data = {"vault_path": str(vault.root), "name": name}
+        vault = Vault.init(root, name=name, research_dir=research_dir, harnesses=targets)
+        data = {
+            "vault_path": str(vault.root),
+            "name": name,
+            "harnesses": [h.id for h in targets],
+        }
         if json_output:
             output(success(data), json_mode=True)
         else:
             console.print(f"[green]Initialized vault:[/] {vault.root}")
+            console.print(
+                f"[dim]Context file for:[/] {', '.join(h.label for h in targets)}"
+            )
     except VaultError as e:
         if json_output:
             output(error(str(e), "VAULT_EXISTS"), json_mode=True)

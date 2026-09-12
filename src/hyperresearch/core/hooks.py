@@ -1,34 +1,62 @@
-"""Agent hook installer — installs the Claude Code PreToolUse hook, skills, and subagents.
+"""Agent installer — installs the skills, subagents, and web-reminder hook.
 
-The hook reminds Claude Code to check the research base before doing raw web
-searches. The `/hyperresearch` skill drives the research
-protocol. The hyperresearch subagents (fetcher, loci-analyst, depth-investigator,
-four critics, patcher, polish-auditor) are Claude Code registered agents
-spawned via the Task tool.
+hyperresearch installs the same pipeline into every harness it supports
+(Claude Code, OMP, Pi — see core/harnesses.py). Per harness this module
+writes:
+
+  - the entry skill (the `/hyperresearch` router) and the 18 step skills
+    into the harness's skills dir
+  - the subagent prompts into the harness's agents dir, with tool names and
+    model selectors rendered for that harness
+  - a reminder that fires before raw web searches: a PreToolUse hook in
+    `.claude/settings.json` on Claude Code, an extension module under
+    `<config>/extensions/` on OMP, nothing on Pi (it has no web tool)
+
+Everything is rendered from one set of templates; `h` in a template is the
+target harness. Claude Code rendering is the reference and is pinned
+byte-for-byte by the golden prompt tests.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from pathlib import Path
+
+from hyperresearch.core.harnesses import CLAUDE, Harness, get_harness
 
 # ---------------------------------------------------------------------------
 # Prompt rendering — skill files and agent prompt bodies are Jinja templates
 # (custom << >> delimiters; see core/render.py). The active render context is
 # process-global state set by install_hooks()/install_global_hooks() before
-# the installers run; direct calls to individual _install_* helpers (tests)
-# fall back to a default full-profile context lazily.
+# the installers run, once per target harness; direct calls to individual
+# _install_* helpers (tests) fall back to a default full-profile Claude Code
+# context lazily.
 # ---------------------------------------------------------------------------
 _RENDER_STATE: dict | None = None
 
 
-def _set_render_state(profile_name: str, config_path: Path | None) -> None:
+def _set_render_state(
+    profile_name: str,
+    config_path: Path | None,
+    harness: Harness = CLAUDE,
+    scope: str = "project",
+) -> None:
+    """Set the active install pass: which profile, harness, and scope.
+
+    `scope` is `"project"` (paths under `<root>/<config_dir>/`) or `"global"`
+    (paths under the harness's user-level dir, e.g. `~/.omp/agent/`). One
+    state object drives both rendering and destination resolution so a pass
+    cannot render for one harness and write into another's directory.
+    """
     global _RENDER_STATE
     from hyperresearch.core.render import build_render_context
 
     _RENDER_STATE = {
         "profile_name": profile_name,
-        "context": build_render_context(config_path, primary=profile_name),
+        "harness": harness,
+        "scope": scope,
+        "context": build_render_context(config_path, primary=profile_name, harness=harness),
     }
 
 
@@ -39,13 +67,55 @@ def _get_render_state() -> dict:
     return _RENDER_STATE
 
 
+def _active_harness() -> Harness:
+    return _get_render_state()["harness"]
+
+
+def _skills_root(root: Path) -> Path:
+    """Skills directory of the active pass, under `root`."""
+    state = _get_render_state()
+    harness: Harness = state["harness"]
+    if state["scope"] == "global":
+        return harness.global_skills_dir(root)
+    return harness.skills_dir(root)
+
+
+def _agents_root(root: Path) -> Path:
+    """Agents directory of the active pass, under `root`."""
+    state = _get_render_state()
+    harness: Harness = state["harness"]
+    if state["scope"] == "global":
+        return harness.global_agents_dir(root)
+    return harness.agents_dir(root)
+
+
+def _rel(path: Path, root: Path) -> str:
+    """Display path for an install action message."""
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _normalize_harnesses(harnesses: Sequence[Harness | str] | None) -> tuple[Harness, ...]:
+    """Accept harness objects, harness ids, or None (Claude Code only)."""
+    if not harnesses:
+        return (CLAUDE,)
+    return tuple(h if isinstance(h, Harness) else get_harness(h) for h in harnesses)
+
+
 def _render_installed(content: str) -> str:
     """Render a prompt template and stamp the provenance header."""
     from hyperresearch import __version__
-    from hyperresearch.core.render import insert_after_frontmatter, render_header, render_prompt
+    from hyperresearch.core.render import (
+        compact_frontmatter,
+        insert_after_frontmatter,
+        render_header,
+        render_prompt,
+    )
 
     state = _get_render_state()
-    rendered = render_prompt(content, state["context"])
+    rendered = compact_frontmatter(render_prompt(content, state["context"]))
     header = render_header(state["profile_name"], __version__)
     return insert_after_frontmatter(rendered, header)
 
@@ -98,8 +168,8 @@ description: >
   parallel; the orchestrator dedupes their outputs. Identifying genuine
   rabbitholes requires real reading comprehension and judgment about
   what is load-bearing evidence vs. surface detail.
-model: << p.models.loci_analyst >>
-tools: Bash, Read, Write
+<< h.model_line(p.models.loci_analyst) >>
+tools: << h.tools("bash", "read", "write") >>
 color: green
 ---
 
@@ -304,8 +374,8 @@ description: >
   writes ONE interim report note summarizing what it learned. Spawn
   one depth-investigator per locus, in parallel. Synthesizing a
   narrow-but-deep question requires real reading comprehension.
-model: << p.models.depth_investigator >>
-tools: Bash, Read, Write, Task
+<< h.model_line(p.models.depth_investigator) >>
+tools: << h.tools("bash", "read", "write", "task") >>
 color: purple
 ---
 
@@ -402,8 +472,11 @@ prompt. No block = this prompt's defaults apply unchanged.
 
 3. **Fetch new sources via the fetcher subagent.** Do NOT call
    `{hpr_path} fetch` directly. Delegate to `hyperresearch-fetcher` via the
-   Task tool. Batch requests — one Task call with multiple URLs is cheaper
-   than many Task calls with one URL each. When spawning a fetcher:
+<% if h.has_subagents %>   << h.tool("task") >> tool. Batch requests — one << h.tool("task") >> call with multiple URLs is cheaper
+   than many << h.tool("task") >> calls with one URL each. When spawning a fetcher:<% else %>   `{hpr_path} spawn` bridge: write the fetcher's prompt to a file, then run
+   `{hpr_path} spawn hyperresearch-fetcher --prompt-file <file> --json` with the
+   bash tool. Batch requests — one spawn carrying several URLs is cheaper than
+   several spawns carrying one URL each. When spawning a fetcher:<% endif %>
    - Pass `--tag <corpus_tag>` and an additional `--tag locus-<locus-name>`
      so the interim notes stay attributable
    - Pass `--suggested-by <corpus-note-id>` if the URL came from a corpus
@@ -593,8 +666,8 @@ description: >
   hedges, or straw-mans counter-evidence. Adversarial reading is real
   reasoning. Spawn ONCE per draft, in parallel with depth-critic and
   width-critic.
-model: << p.models.critics >>
-tools: Bash, Read, Write
+<< h.model_line(p.models.critics) >>
+tools: << h.tools("bash", "read", "write") >>
 color: red
 ---
 
@@ -727,8 +800,8 @@ description: >
   over technical substance that the vault's interim notes could
   actually support. Spawn ONCE per draft, parallel with
   dialectic-critic and width-critic.
-model: << p.models.critics >>
-tools: Bash, Read, Write
+<< h.model_line(p.models.critics) >>
+tools: << h.tools("bash", "read", "write") >>
 color: red
 ---
 
@@ -845,8 +918,8 @@ description: >
   draft and returns a findings list of topics the width corpus supports
   but the draft doesn't cover. Spawn ONCE per draft,
   parallel with dialectic-critic and depth-critic.
-model: << p.models.critics >>
-tools: Bash, Read, Write
+<< h.model_line(p.models.critics) >>
+tools: << h.tools("bash", "read", "write") >>
 color: red
 ---
 
@@ -1005,8 +1078,8 @@ description: >
   readability patterns (definitions, citation density, forward analysis,
   comparison tables) that reference reports consistently include.
   Spawn ONCE per draft, in parallel with the other three critics.
-model: << p.models.critics >>
-tools: Bash, Read, Write
+<< h.model_line(p.models.critics) >>
+tools: << h.tools("bash", "read", "write") >>
 color: red
 ---
 
@@ -1330,8 +1403,8 @@ description: >
   ONLY. Cannot Write. Cannot regenerate. Substance-integration requires
   judgment about which findings serve the research_query and which are
   critic noise. Spawn ONCE after all four critics return.
-model: << p.models.patcher >>
-tools: Read, Edit
+<< h.model_line(p.models.patcher) >>
+tools: << h.tools("read", "edit") >>
 color: orange
 ---
 
@@ -1507,8 +1580,8 @@ description: >
   Cannot Write. Semantic rewrites of scaffold vocabulary and judgment
   calls about hedge-language require strong prose understanding.
   Spawn ONCE after the patcher finishes.
-model: << p.models.polish_auditor >>
-tools: Read, Edit
+<< h.model_line(p.models.polish_auditor) >>
+tools: << h.tools("read", "edit") >>
 color: yellow
 ---
 
@@ -1868,8 +1941,8 @@ description: >
   `note show` (no vault surveys, no decision-making about what to read),
   then writes one complete draft from the assigned angle. The main
   orchestrator synthesizes a final report from all three drafts.
-model: << p.models.draft_orchestrator >>
-tools: Bash, Read, Write
+<< h.model_line(p.models.draft_orchestrator) >>
+tools: << h.tools("bash", "read", "write") >>
 color: green
 ---
 
@@ -2073,8 +2146,8 @@ description: >
   argumentative density. The final report is a fresh write in ONE prose
   voice, NOT section-grafted from the inputs. Tool-locked: Read + Write
   ONLY. Cannot Bash, cannot spawn subagents.
-model: << p.models.synthesizer >>
-tools: Read, Write
+<< h.model_line(p.models.synthesizer) >>
+tools: << h.tools("read", "write") >>
 color: cyan
 ---
 
@@ -2510,8 +2583,8 @@ description: >
   / bold-keyterms / split-sentence / remove-hr / add-whitespace).
   Tool-locked to [Read, Write] — cannot Edit. The orchestrator decides
   which recommendations to apply via direct Edit calls.
-model: << p.models.readability_recommender >>
-tools: Read, Write
+<< h.model_line(p.models.readability_recommender) >>
+tools: << h.tools("read", "write") >>
 color: magenta
 ---
 
@@ -2725,8 +2798,8 @@ description: >
   sources are already adequately covered by the fetcher's summary.
   Spawn multiple in parallel for multiple independent long sources.
   Does NOT spawn any other subagents itself (leaf).
-model: << p.models.source_analyst >>
-tools: Bash, Read, Write
+<< h.model_line(p.models.source_analyst) >>
+tools: << h.tools("bash", "read", "write") >>
 color: cyan
 ---
 
@@ -2921,8 +2994,8 @@ description: >
   citation chains and references to discover and fetch primary sources the
   secondary sources cite. Needs solid comprehension and judgment.
   Spawn multiple in parallel for bulk research.
-model: << p.models.fetcher >>
-tools: Bash, Read, Write, WebSearch
+<< h.model_line(p.models.fetcher) >>
+tools: << h.tools("bash", "read", "write", "web_search") >>
 color: blue
 ---
 
@@ -3138,8 +3211,10 @@ those primaries gives the pipeline higher-authority sources to cite.
      PYTHONIOENCODING=utf-8 {hpr_path} sources check "<url>" -j
      PYTHONIOENCODING=utf-8 {hpr_path} fetch "<url>" --tag <topic> --suggested-by <note-id-that-cited-it> --suggested-by-reason "cited as primary source" -j
      ```
-   - If you only have author + title (no URL), use WebSearch to locate it:
-     search for `"<author> <title> <year>"` or `"<title> filetype:pdf"`
+<% if h.supports("web_search") %>   - If you only have author + title (no URL), use << h.tool("web_search") >> to locate it:
+     search for `"<author> <title> <year>"` or `"<title> filetype:pdf"`<% else %>   - If you only have author + title (no URL), locate it with
+     `{hpr_path} scholar search "<author> <title> <year>" -j` — this harness has
+     no web-search tool, and the scholarly APIs resolve a citation better anyway<% endif %>
    - For academic papers: try these URL patterns directly:
      - arXiv: `https://arxiv.org/abs/<id>` or search arXiv
      - DOI: `https://doi.org/<doi>` — fetch the DOI URL directly
@@ -3188,8 +3263,8 @@ description: >
   overturn the current direction?" Outputs a targeted fetch list of 3-8
   high-leverage missing sources. Spawn ONCE before
   drafting, after Layer 3.5 comparisons.
-model: << p.models.corpus_critic >>
-tools: Bash, Read, Write
+<< h.model_line(p.models.corpus_critic) >>
+tools: << h.tools("bash", "read", "write") >>
 color: teal
 ---
 
@@ -3307,21 +3382,21 @@ BROWSER_FETCHER_AGENT = """\
 name: hyperresearch-browser-fetcher
 description: >
   Escalation-lane fetcher that drives the user's REAL Chrome browser (via
-  Claude-in-Chrome) for sources headless crawling cannot reach: login-gated
+  << h.browser_label >>) for sources headless crawling cannot reach: login-gated
   pages, bot-walled sites, interactive/infinite-scroll pages, viewer-rendered
   PDFs, and Google Scholar searches. Drains the `hyperresearch escalation`
   queue serially — one item, one tab, at a time. Spawn EXACTLY ONE at a time;
   parallel instances fighting over one browser is chaos. HARD BOUNDARY:
   never attempts to solve CAPTCHAs, 2FA, or logins — those are marked
   needs_human and consolidated for the user.
-model: << p.models.browser_fetcher >>
-tools: Bash, Read, Write, ToolSearch
+<< h.model_line(p.models.browser_fetcher) >>
+tools: << h.tools("bash", "read", "write", "tool_search", "browser") >>
 color: orange
 ---
 
 You are the hyperresearch browser-lane fetcher. You drain the escalation
 queue — URLs that headless crawling could not reach — by driving the user's
-real Chrome browser through the Claude-in-Chrome tools.
+real Chrome browser through << h.browser_surface >>.
 
 Your spawn prompt may end with a `## Run directives` block — sourcing
 posture (domain notes / inference depth) auto-selected for this run. It
@@ -3346,7 +3421,7 @@ redirects.
 
 ## Setup (once per session)
 
-Load the Chrome tools in ONE batched ToolSearch call:
+<% if h.browser_lane == "claude-in-chrome" %>Load the Chrome tools in ONE batched ToolSearch call:
 
 ToolSearch query: "select:mcp__claude-in-chrome__tabs_context_mcp,mcp__claude-in-chrome__tabs_create_mcp,mcp__claude-in-chrome__navigate,mcp__claude-in-chrome__get_page_text,mcp__claude-in-chrome__read_page,mcp__claude-in-chrome__find,mcp__claude-in-chrome__computer"
 
@@ -3354,7 +3429,20 @@ Then call tabs_context_mcp once. ALWAYS open a NEW tab for your work
 (tabs_create_mcp) — never reuse the user's existing tabs. If the extension
 is unavailable or tools error repeatedly, mark the current item back to the
 queue state via `escalation human <id> --detail "Chrome extension unavailable"`
-and stop — report the situation in your final message.
+and stop — report the situation in your final message.<% else %>Open your own tab on the user's real Chrome through the eval tool's browser
+prelude:
+
+```javascript
+const tab = await browser.open({ name: "hpr-escalation", app: { relay: true }, persist: true });
+```
+
+`app.relay` drives the user's logged-in Chrome, so every action is
+attributed to them. ALWAYS work in the tab you opened — never navigate the
+user's visible tab. If the relay is unavailable or the calls error
+repeatedly, mark the current item back to the queue state via
+`escalation human <id> --detail "Chrome relay unavailable"` and stop —
+report the situation in your final message. Call `await tab.close()` when
+the drain finishes.<% endif %>
 
 ## The drain loop
 
@@ -3369,16 +3457,16 @@ Repeat up to your assigned batch size (default 10 items):
 2. **Navigate** the claimed URL in your tab. Wait for content. Human-paced:
    one page at a time, no rapid-fire requests.
 
-3. **Extract.** Prefer `get_page_text` (whole-page text) over DOM surgery.
+3. **Extract.** Prefer `<< h.browser_text >>` (whole-page text) over DOM surgery.
    Playbook for hard pages:
    - **Infinite scroll / "load more":** scroll or click until content
      stabilizes, hard cap ~10 interactions, then extract once.
    - **In-page navigation (SPAs, tabs, accordions):** expand sections that
      contain content relevant to the research query; skip nav chrome.
-   - **PDF in a viewer:** extract the viewer's text layer via get_page_text;
+   - **PDF in a viewer:** extract the viewer's text layer via << h.browser_text >>;
      if empty, note "PDF viewer without text layer" and mark needs_human
      with the download suggestion.
-   - **Charts/figures with thin text:** screenshot via the computer tool and
+   - **Charts/figures with thin text:** screenshot via << h.browser_screenshot >> and
      transcribe the load-bearing figures/axis values into a
      `## Extracted figures` section of your writeup.
    - **CAPTCHA / login / 2FA appears:** STOP. `escalation human` (see
@@ -3439,8 +3527,8 @@ description: >
   unsupported / wrong-source) as findings JSON the patcher consumes.
   This is reading comprehension at volume, not prose judgment.
   Never edits the report.
-model: << p.models.cite_checker >>
-tools: Bash, Read, Write
+<< h.model_line(p.models.cite_checker) >>
+tools: << h.tools("bash", "read", "write") >>
 color: red
 ---
 
@@ -3514,6 +3602,32 @@ For each assigned pair:
 """
 
 
+def _reminder_text(hpr_path: str) -> str:
+    """The pre-web-search reminder, shared by every harness's reminder lane.
+
+    One source of truth: the Claude Code PreToolUse hook script and the
+    OMP extension both embed this string, so the two cannot drift.
+    """
+    return "\n".join(
+        [
+            "HYPERRESEARCH: A research knowledge base exists in this project.",
+            "",
+            "BEFORE searching the web, check existing research:",
+            f'  {hpr_path} search "<your query>" -j',
+            "",
+            "DO NOT fetch source pages with a raw web tool. Use hyperresearch fetch instead:",
+            f'  {hpr_path} fetch "<url>" --tag <topic> -j',
+            "It runs a real headless browser, saves full content + screenshot, "
+            "and indexes for future sessions.",
+            "",
+            "After fetching, READ the content and FOLLOW LINKS to primary sources. "
+            "Keep fetching until you have the real sources, not just summaries.",
+            "",
+            "For multiple URLs, use subagents to fetch in parallel.",
+        ]
+    )
+
+
 HOOK_SCRIPT_TEMPLATE = """\
 #!/usr/bin/env node
 /**
@@ -3523,7 +3637,7 @@ HOOK_SCRIPT_TEMPLATE = """\
 const fs = require('fs');
 const path = require('path');
 
-const HPR = '{hpr_path}';
+const MSG = {msg};
 
 // Check if a .hyperresearch directory exists (vault is initialized)
 function findVault() {{
@@ -3536,30 +3650,34 @@ function findVault() {{
     }}
 }}
 
-const vault = findVault();
-if (vault) {{
-    const msg = [
-        'HYPERRESEARCH: A research knowledge base exists in this project.',
-        '',
-        'BEFORE searching the web, check existing research:',
-        '  ' + HPR + ' search "<your query>" -j',
-        '',
-        'DO NOT use WebFetch for source pages. Use hyperresearch fetch instead:',
-        '  ' + HPR + ' fetch "<url>" --tag <topic> -j',
-        'It runs a real headless browser, saves full content + screenshot, and indexes for future sessions.',
-        '',
-        'After fetching, READ the content and FOLLOW LINKS to primary sources. Keep fetching until you have the real sources, not just summaries.',
-        '',
-        'For multiple URLs, use subagents to fetch in parallel.',
-    ].join('\\n');
+if (findVault()) {{
     // stderr reaches the model only on exit 2. On exit 0 it goes to the debug
     // log, so the reminder has to leave as hookSpecificOutput JSON on stdout.
     process.stdout.write(JSON.stringify({{
         hookSpecificOutput: {{
             hookEventName: 'PreToolUse',
-            additionalContext: msg
+            additionalContext: MSG
         }}
     }}) + '\\n');
+}}
+"""
+
+
+EXTENSION_TEMPLATE = """\
+/**
+ * hyperresearch web-search reminder — installed by `hyperresearch install`.
+ *
+ * The harness has no PreToolUse injection channel, so the reminder rides on
+ * the result of a web search instead: same text, same intent, one turn later.
+ */
+const REMINDER = {msg};
+
+export default function hyperresearch(pi) {{
+    pi.on("tool_result", async (event) => {{
+        if (event.isError) return;
+        if (event.toolName !== "web_search") return;
+        return {{ content: [...event.content, {{ type: "text", text: REMINDER }}] }};
+    }});
 }}
 """
 
@@ -3568,11 +3686,13 @@ def install_hooks(
     vault_root: Path,
     hpr_path: str = "hyperresearch",
     profile: str = "full",
+    harnesses: Sequence[Harness | str] | None = None,
 ) -> list[str]:
-    """Install the Claude Code hook + skills + subagents. Returns list of actions taken.
+    """Install skills + subagents + the web reminder into each harness.
 
-    Skill and agent prompts are rendered from the given pipeline profile
-    (plus any `[profile.*]` overlays in the vault's config.toml).
+    Skill and agent prompts are rendered per harness from the given pipeline
+    profile (plus any `[profile.*]` overlays in the vault's config.toml).
+    `harnesses` defaults to Claude Code alone.
 
     Hyperresearch roster (as of v7):
       fetcher (Layer 1, 3, 4), loci-analyst (Layer 2), depth-investigator (Layer 3),
@@ -3580,36 +3700,48 @@ def install_hooks(
       draft-orchestrator (Layer 4, 3x parallel),
       dialectic-critic + depth-critic + width-critic + instruction-critic (Layer 5),
       patcher (Layer 6), polish-auditor (Layer 7).
+
+    The browser-fetcher installs only on harnesses that can drive a real
+    browser; elsewhere blocked fetches stay queued as escalations.
     """
     config_path = vault_root / ".hyperresearch" / "config.toml"
-    _set_render_state(profile, config_path if config_path.exists() else None)
-    actions = []
+    actions: list[str] = []
 
-    for installer in (
-        lambda: _install_claude_hook(vault_root, hpr_path),
-        lambda: _install_hyperresearch_skill(vault_root),
-        lambda: _install_hyperresearch_step_skills(vault_root),
-        lambda: _install_researcher_agent(vault_root, hpr_path),
-        lambda: _install_loci_analyst_agent(vault_root, hpr_path),
-        lambda: _install_depth_investigator_agent(vault_root, hpr_path),
-        lambda: _install_source_analyst_agent(vault_root, hpr_path),
-        lambda: _install_dialectic_critic_agent(vault_root, hpr_path),
-        lambda: _install_instruction_critic_agent(vault_root, hpr_path),
-        lambda: _install_depth_critic_agent(vault_root, hpr_path),
-        lambda: _install_width_critic_agent(vault_root, hpr_path),
-        lambda: _install_patcher_agent(vault_root, hpr_path),
-        lambda: _install_polish_auditor_agent(vault_root, hpr_path),
-        lambda: _install_readability_reformatter_agent(vault_root, hpr_path),
-        lambda: _install_corpus_critic_agent(vault_root, hpr_path),
-        lambda: _install_draft_orchestrator_agent(vault_root, hpr_path),
-        lambda: _install_synthesizer_agent(vault_root, hpr_path),
-        lambda: _install_browser_fetcher_agent(vault_root, hpr_path),
-        lambda: _install_cite_checker_agent(vault_root, hpr_path),
-        lambda: _prune_retired_agents(vault_root),
-    ):
-        result = installer()
-        if result:
-            actions.append(result)
+    for harness in _normalize_harnesses(harnesses):
+        _set_render_state(
+            profile,
+            config_path if config_path.exists() else None,
+            harness=harness,
+        )
+
+        installers = [
+            lambda: _install_reminder_hook(vault_root, hpr_path),
+            lambda: _install_hyperresearch_skill(vault_root),
+            lambda: _install_hyperresearch_step_skills(vault_root),
+            lambda: _install_researcher_agent(vault_root, hpr_path),
+            lambda: _install_loci_analyst_agent(vault_root, hpr_path),
+            lambda: _install_depth_investigator_agent(vault_root, hpr_path),
+            lambda: _install_source_analyst_agent(vault_root, hpr_path),
+            lambda: _install_dialectic_critic_agent(vault_root, hpr_path),
+            lambda: _install_instruction_critic_agent(vault_root, hpr_path),
+            lambda: _install_depth_critic_agent(vault_root, hpr_path),
+            lambda: _install_width_critic_agent(vault_root, hpr_path),
+            lambda: _install_patcher_agent(vault_root, hpr_path),
+            lambda: _install_polish_auditor_agent(vault_root, hpr_path),
+            lambda: _install_readability_reformatter_agent(vault_root, hpr_path),
+            lambda: _install_corpus_critic_agent(vault_root, hpr_path),
+            lambda: _install_draft_orchestrator_agent(vault_root, hpr_path),
+            lambda: _install_synthesizer_agent(vault_root, hpr_path),
+            lambda: _install_cite_checker_agent(vault_root, hpr_path),
+            lambda: _prune_retired_agents(vault_root),
+        ]
+        if harness.browser_lane:
+            installers.insert(-1, lambda: _install_browser_fetcher_agent(vault_root, hpr_path))
+
+        for installer in installers:
+            result = installer()
+            if result:
+                actions.append(result)
 
     return actions
 
@@ -3618,58 +3750,93 @@ def install_global_hooks(
     home: Path | None = None,
     hpr_path: str = "hyperresearch",
     profile: str = "full",
+    harnesses: Sequence[Harness | str] | None = None,
 ) -> list[str]:
-    """Install Claude Code skills + agents globally under ~/.claude/.
+    """Install the entry skill + agents at user level, for every harness.
+
+    Destinations are the harnesses' own user-level roots: `~/.claude/`,
+    `~/.omp/agent/`, `~/.pi/agent/`.
 
     Unlike `install_hooks`, this skips:
-      - The PreToolUse vault-check hook (don't want it firing on every
-        Claude Code session, only ones that have a hyperresearch vault)
-      - Vault init (handled per-project, on first /hyperresearch invocation)
-      - CLAUDE.md injection (per-project)
-      - **The 16 step skills**. Globally advertising 16 internal step
+      - The web-search reminder (don't want it firing in every session,
+        only ones that have a hyperresearch vault)
+      - Vault init (handled per-project, on first run)
+      - Context-file injection (per-project)
+      - **The 18 step skills**. Globally advertising 18 internal step
         skills would add ~3K tokens of system-reminder noise to every
-        Claude Code session. Step skills install per-project, lazily,
-        when the entry-skill bootstrap calls `hyperresearch install
-        --steps-only .` on first /hyperresearch invocation. Sessions in
-        unrelated projects see zero step-skill noise.
+        session. Step skills install per-project, lazily, when the
+        entry-skill bootstrap calls `hyperresearch install --steps-only .`
+        on the first run in that project. Sessions in unrelated projects
+        see zero step-skill noise.
 
-    The result: pip install + this once, and `/hyperresearch` is available
-    in every Claude Code session anywhere on the machine. The vault,
-    research/, CLAUDE.md, and the 16 step skills all materialize in the
-    project root where Claude Code is running, on first invocation.
+    The result: pip install + this once, and the entry skill is available in
+    every session anywhere on the machine. The vault, research/, the context
+    file, and the 18 step skills all materialize in the project root where
+    the agent is running, on first invocation.
 
-    Also prunes any hyperresearch-N-* step-skill dirs left in ~/.claude/skills/
-    by older versions (≤0.8.2 used to install step skills globally).
+    Also prunes any hyperresearch-N-* step-skill dirs left in a harness's
+    global skills dir by older versions (≤0.8.2 installed them globally).
     """
     if home is None:
         home = Path.home()
 
-    # Global installs have no vault config — built-in profiles only.
-    _set_render_state(profile, None)
-    actions = []
+    actions: list[str] = []
 
-    for installer in (
-        lambda: _install_hyperresearch_skill(home),
-        lambda: _install_researcher_agent(home, hpr_path),
-        lambda: _install_loci_analyst_agent(home, hpr_path),
-        lambda: _install_depth_investigator_agent(home, hpr_path),
-        lambda: _install_source_analyst_agent(home, hpr_path),
-        lambda: _install_dialectic_critic_agent(home, hpr_path),
-        lambda: _install_instruction_critic_agent(home, hpr_path),
-        lambda: _install_depth_critic_agent(home, hpr_path),
-        lambda: _install_width_critic_agent(home, hpr_path),
-        lambda: _install_patcher_agent(home, hpr_path),
-        lambda: _install_polish_auditor_agent(home, hpr_path),
-        lambda: _install_readability_reformatter_agent(home, hpr_path),
-        lambda: _install_corpus_critic_agent(home, hpr_path),
-        lambda: _install_draft_orchestrator_agent(home, hpr_path),
-        lambda: _install_synthesizer_agent(home, hpr_path),
-        lambda: _install_browser_fetcher_agent(home, hpr_path),
-        lambda: _install_cite_checker_agent(home, hpr_path),
-        lambda: _prune_retired_agents(home),
-        lambda: _prune_global_step_skills(home),
-    ):
-        result = installer()
+    for harness in _normalize_harnesses(harnesses):
+        # Global installs have no vault config — built-in profiles only.
+        _set_render_state(profile, None, harness=harness, scope="global")
+
+        installers = [
+            lambda: _install_hyperresearch_skill(home),
+            lambda: _install_researcher_agent(home, hpr_path),
+            lambda: _install_loci_analyst_agent(home, hpr_path),
+            lambda: _install_depth_investigator_agent(home, hpr_path),
+            lambda: _install_source_analyst_agent(home, hpr_path),
+            lambda: _install_dialectic_critic_agent(home, hpr_path),
+            lambda: _install_instruction_critic_agent(home, hpr_path),
+            lambda: _install_depth_critic_agent(home, hpr_path),
+            lambda: _install_width_critic_agent(home, hpr_path),
+            lambda: _install_patcher_agent(home, hpr_path),
+            lambda: _install_polish_auditor_agent(home, hpr_path),
+            lambda: _install_readability_reformatter_agent(home, hpr_path),
+            lambda: _install_corpus_critic_agent(home, hpr_path),
+            lambda: _install_draft_orchestrator_agent(home, hpr_path),
+            lambda: _install_synthesizer_agent(home, hpr_path),
+            lambda: _install_cite_checker_agent(home, hpr_path),
+            lambda: _prune_retired_agents(home),
+            lambda: _prune_global_step_skills(home),
+        ]
+        if harness.browser_lane:
+            installers.insert(-2, lambda: _install_browser_fetcher_agent(home, hpr_path))
+
+        for installer in installers:
+            result = installer()
+            if result:
+                actions.append(result)
+
+    return actions
+
+
+def install_step_skills(
+    vault_root: Path,
+    profile: str = "full",
+    harnesses: Sequence[Harness | str] | None = None,
+) -> list[str]:
+    """Install only the 18 step skills — the entry skill's lazy bootstrap.
+
+    Called by `hyperresearch install --steps-only <path>` on the first run in
+    a project after a global install.
+    """
+    config_path = vault_root / ".hyperresearch" / "config.toml"
+    actions: list[str] = []
+
+    for harness in _normalize_harnesses(harnesses):
+        _set_render_state(
+            profile,
+            config_path if config_path.exists() else None,
+            harness=harness,
+        )
+        result = _install_hyperresearch_step_skills(vault_root)
         if result:
             actions.append(result)
 
@@ -3677,12 +3844,12 @@ def install_global_hooks(
 
 
 def _prune_global_step_skills(home: Path) -> str | None:
-    """Remove hyperresearch-N-* step skill dirs from ~/.claude/skills/.
+    """Remove hyperresearch-N-* step skill dirs from the global skills dir.
 
     Used by install_global_hooks to clean up after older versions (≤0.8.2)
     that installed step skills globally. Step skills now live per-project.
     """
-    skills_root = home / ".claude" / "skills"
+    skills_root = _skills_root(home)
     if not skills_root.is_dir():
         return None
 
@@ -3690,8 +3857,8 @@ def _prune_global_step_skills(home: Path) -> str | None:
     for child in skills_root.iterdir():
         if not child.is_dir():
             continue
-        # Match hyperresearch-<digit>-* (the 16 step skills) but not
-        # the entry skill at .claude/skills/hyperresearch/
+        # Match hyperresearch-<digit>-* (the 18 step skills) but not
+        # the entry skill dir (`<skills>/hyperresearch/`)
         name = child.name
         if not name.startswith("hyperresearch-"):
             continue
@@ -3709,20 +3876,39 @@ def _prune_global_step_skills(home: Path) -> str | None:
 
 
 def _write_hook_script(vault_root: Path, hpr_path: str) -> Path:
-    """Write the hook JS script to .hyperresearch/hook.js."""
+    """Write the Claude Code hook script to .hyperresearch/hook.js."""
     hook_dir = vault_root / ".hyperresearch"
     hook_dir.mkdir(parents=True, exist_ok=True)
     hook_path = hook_dir / "hook.js"
-    js_path = hpr_path.replace("\\", "\\\\")
-    hook_path.write_text(HOOK_SCRIPT_TEMPLATE.format(hpr_path=js_path), encoding="utf-8")
+    script = HOOK_SCRIPT_TEMPLATE.format(msg=json.dumps(_reminder_text(hpr_path)))
+    hook_path.write_text(script, encoding="utf-8")
     return hook_path
 
 
-def _install_claude_hook(vault_root: Path, hpr_path: str) -> str | None:
-    """Install PreToolUse hook into .claude/settings.json."""
+def _install_reminder_hook(vault_root: Path, hpr_path: str) -> str | None:
+    """Install the "check the vault before searching the web" reminder.
+
+    The lane is the harness's: a PreToolUse hook on Claude Code, an extension
+    module on OMP. Pi has no web tool to intercept, so it gets nothing — the
+    same instruction reaches it through the project context file.
+    """
+    harness = _active_harness()
+    if harness.reminder_hook == "claude-settings":
+        return _install_claude_settings_hook(vault_root, hpr_path, harness)
+    if harness.reminder_hook == "extension":
+        return _install_extension_hook(vault_root, hpr_path, harness)
+    return None
+
+
+def _install_claude_settings_hook(
+    vault_root: Path,
+    hpr_path: str,
+    harness: Harness,
+) -> str | None:
+    """Install the PreToolUse hook into <config>/settings.json."""
     hook_path = _write_hook_script(vault_root, hpr_path)
 
-    settings_dir = vault_root / ".claude"
+    settings_dir = vault_root / harness.config_dir
     settings_dir.mkdir(exist_ok=True)
     settings_path = settings_dir / "settings.json"
 
@@ -3755,7 +3941,29 @@ def _install_claude_hook(vault_root: Path, hpr_path: str) -> str | None:
     })
 
     settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-    return "Claude Code: .claude/settings.json (PreToolUse hook)"
+    return f"{harness.label}: {harness.config_dir}/settings.json (PreToolUse hook)"
+
+
+def _install_extension_hook(
+    vault_root: Path,
+    hpr_path: str,
+    harness: Harness,
+) -> str | None:
+    """Install the reminder as a harness extension module.
+
+    A project extension dir is auto-discovered, so the module loads for every
+    session started in the vault and for nothing else.
+    """
+    ext_dir = harness.extensions_dir(vault_root) / "hyperresearch"
+    ext_path = ext_dir / "index.ts"
+    content = EXTENSION_TEMPLATE.format(msg=json.dumps(_reminder_text(hpr_path)))
+
+    if ext_path.exists() and ext_path.read_text(encoding="utf-8") == content:
+        return None
+
+    ext_dir.mkdir(parents=True, exist_ok=True)
+    ext_path.write_text(content, encoding="utf-8")
+    return f"{harness.label}: {_rel(ext_path, vault_root)} (web_search reminder)"
 
 
 def _write_agent_file(
@@ -3765,7 +3973,7 @@ def _write_agent_file(
     label: str,
 ) -> str | None:
     """Install a subagent file, returning the install message or None if unchanged."""
-    agents_dir = vault_root / ".claude" / "agents"
+    agents_dir = _agents_root(vault_root)
     agents_dir.mkdir(parents=True, exist_ok=True)
     agent_path = agents_dir / filename
 
@@ -3777,7 +3985,7 @@ def _write_agent_file(
             return None
 
     agent_path.write_text(content, encoding="utf-8")
-    return f"Claude Code: .claude/agents/{filename} ({label})"
+    return f"{_active_harness().label}: {_rel(agent_path, vault_root)} ({label})"
 
 
 def _install_researcher_agent(vault_root: Path, hpr_path: str) -> str | None:
@@ -3908,7 +4116,7 @@ def _install_readability_reformatter_agent(vault_root: Path, hpr_path: str) -> s
     content = READABILITY_REFORMATTER_AGENT  # already updated to recommender body
 
     # Prune the old agent filename if it exists from a prior install
-    old_path = vault_root / ".claude" / "agents" / "hyperresearch-readability-reformatter.md"
+    old_path = _agents_root(vault_root) / "hyperresearch-readability-reformatter.md"
     if old_path.exists():
         old_path.unlink()
 
@@ -3992,7 +4200,7 @@ def _is_our_skill_dir(path: Path) -> bool:
 
     A name match alone is not license to delete a directory. `research` is an
     ordinary English word and an obvious name for a hand-written personal
-    skill, and `--global` puts the prune in ~/.claude/skills/, which is shared
+    skill, and `--global` puts the prune in a shared user-level skills dir
     across every project the user has. Deleting on name alone destroyed user
     content that was never ours (#73).
     """
@@ -4012,7 +4220,7 @@ def _remove_skill_dir(path: Path) -> None:
 
     shutil.rmtree(path)
 
-# V1 modality files — left over inside .claude/skills/hyperresearch/ on
+# V1 modality files — left over inside <skills>/hyperresearch/ on
 # vaults that were installed before the V8 alias-based entry skill.
 _RETIRED_HYPERRESEARCH_FILES: tuple[str, ...] = (
     "SKILL-collect.md",
@@ -4036,7 +4244,7 @@ def _prune_retired_agents(vault_root: Path) -> str | None:
     pruned: list[str] = []
     kept: list[str] = []
 
-    agents_dir = vault_root / ".claude" / "agents"
+    agents_dir = _agents_root(vault_root)
     if agents_dir.exists():
         for name in _RETIRED_AGENT_FILES:
             p = agents_dir / name
@@ -4044,7 +4252,7 @@ def _prune_retired_agents(vault_root: Path) -> str | None:
                 p.unlink()
                 pruned.append(f"agent {name}")
 
-    skills_dir = vault_root / ".claude" / "skills"
+    skills_dir = _skills_root(vault_root)
     if skills_dir.exists():
         for name in _RETIRED_SKILL_DIRS:
             p = skills_dir / name
@@ -4072,7 +4280,7 @@ def _prune_retired_agents(vault_root: Path) -> str | None:
     if kept:
         parts.append(
             "Left alone (not ours): "
-            + ", ".join(f".claude/skills/{n}" for n in kept)
+            + ", ".join(f"{_rel(skills_dir / n, vault_root)}" for n in kept)
         )
     if not parts:
         return None
@@ -4097,24 +4305,29 @@ def _read_skill_source(src_name: str) -> str | None:
 
 
 def _install_hyperresearch_skill(vault_root: Path) -> str | None:
-    """Install the entry skill at .claude/skills/hyperresearch/SKILL.md.
+    """Install the entry skill at `<skills>/hyperresearch/SKILL.md`.
 
-    Claude Code registers `/hyperresearch` as the slash-command trigger via
-    the skill's `name: hyperresearch` frontmatter. The 16 step skills are
-    installed separately by `_install_hyperresearch_step_skills`.
+    The skill's `name: hyperresearch` frontmatter is what makes the harness
+    offer it as a command (`/hyperresearch` on Claude Code,
+    `/skill:hyperresearch` on OMP and Pi). The 18 step skills are installed
+    separately by `_install_hyperresearch_step_skills`.
     """
     content = _read_skill_source("hyperresearch.md")
     if content is None:
         return None
     content = _render_installed(content)
 
-    skill_dir = vault_root / ".claude" / "skills" / "hyperresearch"
+    harness = _active_harness()
+    skill_dir = _skills_root(vault_root) / "hyperresearch"
     skill_dir.mkdir(parents=True, exist_ok=True)
     dest_path = skill_dir / "SKILL.md"
     if dest_path.exists() and dest_path.read_text(encoding="utf-8") == content:
         return None
     dest_path.write_text(content, encoding="utf-8")
-    return "Claude Code: .claude/skills/hyperresearch/SKILL.md (/hyperresearch trigger)"
+    return (
+        f"{harness.label}: {_rel(dest_path, vault_root)} "
+        f"({harness.invoke_command} trigger)"
+    )
 
 
 _HYPERRESEARCH_STEP_SKILLS = [
@@ -4170,19 +4383,20 @@ def step_skill_slug(step: str | None) -> str | None:
 
 
 def _install_hyperresearch_step_skills(vault_root: Path) -> str | None:
-    """Install the 16 V8 step skills, each as its own Claude Code skill directory.
+    """Install the 18 V8 step skills, each as its own skill directory.
 
-    Each step skill lives at `.claude/skills/hyperresearch-N-name/SKILL.md` and is
-    invocable via the Skill tool. The orchestrator (loaded via /hyperresearch)
-    invokes each step skill in sequence per the tier routing table. This
-    decomposition solves the V7 context-compaction problem: each step's
-    procedure is loaded fresh into context only at the moment it's needed.
+    Each step skill lives at `<skills>/hyperresearch-N-name/SKILL.md` and is
+    loaded on demand (the Skill tool on Claude Code, `skill://` on OMP, a
+    plain file read on Pi). The orchestrator invokes each step skill in
+    sequence per the tier routing table. This decomposition solves the V7
+    context-compaction problem: each step's procedure is loaded fresh into
+    context only at the moment it's needed.
 
     Also prunes any stale `hyperresearch-*` skill directories (e.g. from a prior
     V8 layout where steps were numbered differently) so the user doesn't see
     obsolete entries in their skill list.
     """
-    skills_root = vault_root / ".claude" / "skills"
+    skills_root = _skills_root(vault_root)
     skills_root.mkdir(parents=True, exist_ok=True)
 
     expected = set(_HYPERRESEARCH_STEP_SKILLS)
@@ -4228,4 +4442,7 @@ def _install_hyperresearch_step_skills(vault_root: Path) -> str | None:
         parts.append(f"{len(installed)} step skills: {', '.join(installed)}")
     if pruned:
         parts.append(f"pruned: {', '.join(pruned)}")
-    return f"Claude Code: .claude/skills/hyperresearch-N-*/SKILL.md ({'; '.join(parts)})"
+    return (
+        f"{_active_harness().label}: {_rel(skills_root, vault_root)}"
+        f"/hyperresearch-N-*/SKILL.md ({'; '.join(parts)})"
+    )

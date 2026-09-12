@@ -91,4 +91,4 @@ For each chapter (respecting `depends_on`, up to << dissertation.chapter_concurr
 
 ## Next step
 
-Return to the entry skill and begin the chapter execution loop at step 2 for the first chapter(s): `Skill(skill: "hyperresearch-2-width-sweep")`.
+Return to the entry skill and begin the chapter execution loop at step 2 for the first chapter(s): `<< h.load_skill("hyperresearch-2-width-sweep") >>`.

@@ -63,12 +63,19 @@ def test_agent_docs_created(tmp_path: Path):
     assert "hyperresearch" in content
 
 
-def test_init_only_creates_claude_md(tmp_path: Path):
-    """Vault.init writes CLAUDE.md ONLY — no AGENTS.md, GEMINI.md, or
-    .github/copilot-instructions.md. hyperresearch is Claude Code-only;
-    multi-platform doc generation was removed in v0.6."""
-    vault = Vault.init(tmp_path / "kb-claude-only")
-    assert (vault.root / "CLAUDE.md").exists()
-    assert not (vault.root / "AGENTS.md").exists()
-    assert not (vault.root / "GEMINI.md").exists()
-    assert not (vault.root / ".github" / "copilot-instructions.md").exists()
+def test_init_writes_only_the_target_harness_context_file(tmp_path: Path):
+    """`Vault.init` writes the context file of the harnesses it is given and
+    nothing else — no stray CLAUDE.md on an OMP-only install, and never a
+    GEMINI.md or copilot-instructions.md (other tools' files are left alone,
+    not generated)."""
+    from hyperresearch.core.harnesses import get_harness
+
+    claude_only = Vault.init(tmp_path / "kb-claude-only")
+    assert (claude_only.root / "CLAUDE.md").exists()
+    assert not (claude_only.root / "AGENTS.md").exists()
+    assert not (claude_only.root / "GEMINI.md").exists()
+    assert not (claude_only.root / ".github" / "copilot-instructions.md").exists()
+
+    omp_only = Vault.init(tmp_path / "kb-omp", harnesses=[get_harness("omp")])
+    assert (omp_only.root / "AGENTS.md").exists()
+    assert not (omp_only.root / "CLAUDE.md").exists()

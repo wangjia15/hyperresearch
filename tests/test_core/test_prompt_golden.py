@@ -104,6 +104,21 @@ Deliberate deviations already folded into the goldens (2026-07-19):
     word boundaries — against `p.citation_density_min` per 1000 WORDS (9,
     the old 1.5-per-1000-characters floor expressed in English words)
     instead of per 1000 characters.
+  - Multi-harness install (2026-09-12): prompts render for a target harness
+    (`h` in the template context — see core/harnesses.py), so every
+    Claude-Code-specific mechanic became harness-driven: tool names
+    (`h.tools(...)`, `h.tool(...)`), the `model:` line (`h.model_line(...)`),
+    skill loading (`h.load_skill(...)`), the spawn key (`h.spawn_key`), and
+    install paths (`h.skill_rel(...)`). Under the default `claude` harness
+    every one of those renders the previous bytes, so the goldens below still
+    pin Claude Code's rendering. Two goldens changed on purpose: the entry
+    skill gained a "This copy runs on <harness>" section (start command,
+    skill-load form, spawn syntax, wave fan-out, and the degradations of
+    harnesses without a browser lane or web-search tool) and its `Skill`
+    tool / todo-list prose became harness-conditional; width-sweep's
+    escalation-drain fallback now says "If the browser lane is unavailable"
+    instead of naming the Claude-in-Chrome extension, because the same
+    sentence must be true on OMP.
 """
 
 from __future__ import annotations

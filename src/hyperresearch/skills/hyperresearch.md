@@ -16,11 +16,24 @@ description: >
 You are the orchestrator. Your entire job in this conversation is:
 1. Read this file once at the start.
 2. Bootstrap canonical inputs (research_query, vault_tag, scaffold).
-3. Invoke each step skill in sequence via the `Skill` tool.
-4. Between steps, do nothing except mark todos and (optionally) think to `research/runs/<vault_tag>/temp/orchestrator-notes.md`.
+3. Invoke each step skill in sequence (`<< h.load_skill("hyperresearch-N-stepname") >>`).
+4. Between steps, do nothing except record your position and (optionally) think to `research/runs/<vault_tag>/temp/orchestrator-notes.md`.
 
 You do NOT do the work of any step yourself. The step skills do. You just sequence them.
 
+---
+
+## This copy runs on << h.label >>
+
+The installer renders the pipeline for one harness. On this one:
+
+- **Start a run:** `<< h.invoke_command >> <query>`
+- **Load a step skill:** `<< h.load_skill("hyperresearch-N-stepname") >>`
+- **Spawn a subagent:** `<< h.spawn_syntax >>` — agent prompts live in `<< h.agents_rel >>/hyperresearch-*.md`
+- **Fan out a wave:** << h.parallel_note >>
+<% if not h.browser_lane %>- **No browser lane:** blocked fetches stay queued as escalations instead of being drained mid-run (see below).
+<% endif %><% if not h.supports("web_search") %>- **No web-search tool:** `hyperresearch search` / `hyperresearch scholar search` / `hyperresearch fetch` are the only web lanes, which is the posture the pipeline prefers anyway.
+<% endif %>
 ---
 
 ## How the chain works (READ THIS CAREFULLY)
@@ -28,10 +41,10 @@ You do NOT do the work of any step yourself. The step skills do. You just sequen
 Each pipeline step is its own skill file. To run a step:
 
 ```
-Skill(skill: "hyperresearch-N-stepname")
+<< h.load_skill("hyperresearch-N-stepname") >>
 ```
 
-When you invoke a Skill, that skill's full procedure is loaded into your context **fresh**. You then execute that step's procedure, hit its exit criterion, and return to the entry skill (this file) to invoke the next step.
+Loading a step skill puts that skill's full procedure into your context **fresh**. You then execute that step's procedure, hit its exit criterion, and return to the entry skill (this file) to load the next step.
 
 **Why this design?** Context compaction. V7 was one 1200-line skill that got compacted away by the time Layer 4 needed its triple-draft procedure. The orchestrator forgot the procedure, wrote a single draft, and produced a flat-scoring report. V8 fixes this at the source: each step's procedure is loaded into context **only at the moment it's needed**, fresh, with no eviction risk.
 
@@ -84,7 +97,7 @@ Before you invoke any step skill, do this:
 
 0. **Auto-init if missing.** Two checks for the first-run-after-global-install case:
    - **Vault check.** If `.hyperresearch/` doesn't exist in the working directory, run `hyperresearch init . --json`. Creates the SQLite vault and `research/` directory.
-   - **Step-skills check.** If `.claude/skills/hyperresearch-1-decompose/SKILL.md` doesn't exist relative to the working directory, run `hyperresearch install --steps-only . --json`. Installs the 16 step skill files needed by `Skill(skill: "hyperresearch-N-...")` calls in later steps.
+   - **Step-skills check.** If `<< h.skill_rel("hyperresearch-1-decompose") >>` doesn't exist relative to the working directory, run `hyperresearch install --steps-only . --harness << h.id >> --json`. Installs the 18 step skill files needed by the `<< h.load_skill("hyperresearch-N-...") >>` calls in later steps.
 
    If either command fails because the binary isn't on PATH, tell the user to run `pip install hyperresearch` first. If both files already exist, both commands no-op cheaply — safe to run unconditionally.
 
@@ -130,14 +143,14 @@ Before you invoke any step skill, do this:
    - Tier rationale (filled in after step 1)
    - Wrapper requirements (save path, citation format, terminal sections)
 
-6. **Seed the TodoWrite list.** Create todos for all 16 step skill invocations using the integer step numbers, e.g.:
+<% if h.supports("todo") %>6. **Seed the << h.tool("todo") >> list.** Create todos for all 16 step skill invocations using the integer step numbers, e.g.:
    - `Step 1 — Skill: hyperresearch-1-decompose`
    - `Step 2 — Skill: hyperresearch-2-width-sweep`
    - ... (through Step 16)
 
-   The todo list survives context compaction; it's your durable memory of where you are in the chain.
+   The todo list survives context compaction; it's your durable memory of where you are in the chain.<% else %>6. **Record your position in the run manifest.** This harness has no todo tool, so the manifest IS your step list: call `hyperresearch run step <vault_tag> <N> --status running -j` before each step and `--status done -j` after its exit criterion. `hyperresearch run resume <vault_tag> -j` then replays your exact position after any compaction.<% endif %>
 
-7. **Invoke step 1:** `Skill(skill: "hyperresearch-1-decompose")`.
+7. **Invoke step 1:** `<< h.load_skill("hyperresearch-1-decompose") >>`.
 
 After step 1 returns, read `research/runs/<vault_tag>/prompt-decomposition.json` to learn the tier, then continue invoking step skills per the tier routing table above. After each step's exit criterion is met, mark its todo complete and move to the next.
 
@@ -157,12 +170,20 @@ After step 1 returns, read `research/runs/<vault_tag>/prompt-decomposition.json`
 
 ## Browser-lane escalations (all tiers)
 
-Blocked fetches (login walls, bot walls, captchas) are queued, not lost: `$HPR escalation list --status queued --tag <vault_tag> -j`. Step 2.8 drains the queue via ONE `hyperresearch-browser-fetcher` subagent driving the user's real Chrome browser. Two standing rules:
+Blocked fetches (login walls, bot walls, captchas) are queued, not lost: `$HPR escalation list --status queued --tag <vault_tag> -j`.<% if h.browser_lane %> Step 2.8 drains the queue via ONE `hyperresearch-browser-fetcher` subagent driving the user's real Chrome browser. Two standing rules:
 
 1. **CAPTCHAs / logins / 2FA are ALWAYS the human's.** The browser-fetcher marks them `needs_human`; you consolidate ALL of them into ONE message to the user at a natural pause point (never one interruption per URL). In non-interactive runs, `$HPR run block <vault_tag> --on human-challenges` and continue with everything else.
-2. **One browser-fetcher at a time.** It's the user's actual browser — parallel instances are chaos. Check the queue again after step 13 (gap-fetch) if new fetches got blocked.
+2. **One browser-fetcher at a time.** It's the user's actual browser — parallel instances are chaos. Check the queue again after step 13 (gap-fetch) if new fetches got blocked.<% else %> This harness has no browser lane, so nothing drains the queue during the run: report the queued count in your step-2 summary, and tell the user at the end that those sources are recoverable by re-running the drain from a harness with a browser lane. Queued is the pre-4.0 status quo (source lost), never worse.<% endif %>
 
-## Subagent spawn contract (applies to every Task call)
+## Subagent spawn contract (applies to every spawn)
+
+On this harness you spawn with:
+
+```
+<< h.spawn_syntax >>
+```
+
+<< h.parallel_note >>
 
 When a step skill instructs you to spawn a subagent, the prompt you pass MUST include three pieces near the top:
 
@@ -174,7 +195,7 @@ When a step skill instructs you to spawn a subagent, the prompt you pass MUST in
 
 4. **The run's shim file, pasted VERBATIM.** Step 1 renders posture shims (register / domain notes / inference depth) to `research/runs/<vault_tag>/shims/{research,drafting,critics,polish}.md`. Each step skill's spawn template names which shim its subagents receive; append that file's FULL contents to the end of the spawn prompt, unedited. You never write, summarize, or trim shim text — the file is the single source of truth. The cite-checker receives NO shim (verification is register-independent). If the shims directory is missing, run `$HPR levers render <vault_tag> -j` before spawning.
 
-Skipping any of these in a Task prompt is a process violation.
+Skipping any of these in a spawn prompt is a process violation.
 
 ---
 
@@ -183,7 +204,7 @@ Skipping any of these in a Task prompt is a process violation.
 Context compaction may eat parts of this conversation. If you're unsure what step you're on:
 
 0. **Read the run manifest FIRST.** `hyperresearch run resume <vault_tag> --json` (or with no tag for the newest run) returns the exact next step and the Skill invocation to continue with. This is the primary recovery path — the manifest records every step transition you logged via `hyperresearch run step`. The artifact scan below is the fallback for manifests that are missing or were not kept up to date.
-1. **Check the TodoWrite list.** It carries integer step numbers and survives compaction.
+<% if h.supports("todo") %>1. **Check the << h.tool("todo") >> list.** It carries integer step numbers and survives compaction.<% else %>1. **Re-read the manifest's step history** (`hyperresearch run report <vault_tag> -j`). It carries every step transition you recorded and survives compaction.<% endif %>
 2. **Check disk artifacts (fallback).** Each step writes a canonical artifact:
    - Step 1: `research/runs/<vault_tag>/scaffold.md`, `research/runs/<vault_tag>/prompt-decomposition.json`, `research/runs/<vault_tag>/temp/coverage-matrix.md`
    - Step 2: vault notes tagged with vault_tag (`$HPR note list --tag <vault_tag> --all -j`)
@@ -202,7 +223,7 @@ Context compaction may eat parts of this conversation. If you're unsure what ste
    - Step 15: `research/runs/<vault_tag>/polish-log.json` (and edited final_report.md)
    - Step 16: `research/runs/<vault_tag>/readability-recommendations.json`, `research/runs/<vault_tag>/readability-decisions.json` (and edited final_report.md)
 3. **Find the highest-numbered step whose artifact exists.** Resume from the next step.
-4. **Re-invoke this entry skill** if you've lost track entirely: `Skill(skill: "hyperresearch")`. It loads fresh.
+4. **Re-invoke this entry skill** if you've lost track entirely: `<< h.load_skill("hyperresearch") >>`. It loads fresh.
 
 If you're ever uncertain what to do next, the answer is: re-read this file and find the next step in the tier sequence.
 
@@ -281,7 +302,7 @@ The trade: 16 skill files instead of 1, plus 16 invocations of the `Skill` tool 
 If you've read this far and the bootstrap (above) is done, invoke step 1:
 
 ```
-Skill(skill: "hyperresearch-1-decompose")
+<< h.load_skill("hyperresearch-1-decompose") >>
 ```
 
 If the bootstrap is NOT done, do the bootstrap first, then invoke step 1.

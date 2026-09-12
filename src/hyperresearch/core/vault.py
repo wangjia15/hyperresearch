@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 
 from hyperresearch.core.config import VaultConfig
 from hyperresearch.core.db import get_connection, init_schema
+from hyperresearch.core.harnesses import Harness
 
 HYPERRESEARCH_DIR = ".hyperresearch"
 CONFIG_FILE = "config.toml"
@@ -109,7 +111,12 @@ class Vault:
         self.close()
 
     @staticmethod
-    def init(root: Path, name: str = "Research Base", research_dir: str = "research") -> Vault:
+    def init(
+        root: Path,
+        name: str = "Research Base",
+        research_dir: str = "research",
+        harnesses: Sequence[Harness] | None = None,
+    ) -> Vault:
         """Initialize a new vault at the given path."""
         root = root.resolve()
         hyperresearch_dir = root / HYPERRESEARCH_DIR
@@ -150,9 +157,10 @@ class Vault:
             "# {{ title }}\n\n"
         )
 
-        # Inject CLAUDE.md at vault root
+        # Inject the context file of each target harness (Claude Code alone
+        # when the caller names none).
         from hyperresearch.core.agent_docs import inject_agent_docs
-        inject_agent_docs(root)
+        inject_agent_docs(root, harnesses=harnesses)
 
         return vault
 

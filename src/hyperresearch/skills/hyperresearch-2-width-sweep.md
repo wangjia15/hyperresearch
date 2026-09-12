@@ -127,13 +127,13 @@ Write to `research/runs/<vault_tag>/temp/scored-urls.md`.
 
 ## Step 2.4 — Parallel fetcher waves
 
-**Wave 1 (main wave):** Spawn **<< p.wave1_fetchers|dash >> fetcher subagents in ONE message** — true parallel execution. Each fetcher gets its own non-overlapping batch.
+<% if h.has_subagents %>**Wave 1 (main wave):** Spawn **<< p.wave1_fetchers|dash >> fetcher subagents in ONE message** — true parallel execution. Each fetcher gets its own non-overlapping batch.<% else %>**Wave 1 (main wave):** Run **<< p.wave1_fetchers|dash >> fetchers in ONE `hyperresearch spawn --batch` call** — true parallel execution. Write each fetcher's prompt to `research/runs/<vault_tag>/spawn/fetcher-<n>.md`, list them in `research/runs/<vault_tag>/spawn/wave-1.json` as `[{"agent": "hyperresearch-fetcher", "prompt_file": "<path>"}, ...]`, then run `hyperresearch spawn --batch research/runs/<vault_tag>/spawn/wave-1.json --json`. Each fetcher gets its own non-overlapping batch.<% endif %>
 
 **Subagent type:** `hyperresearch-fetcher`
 
 **Spawn template (use the standard 3-piece contract):**
 ```
-subagent_type: hyperresearch-fetcher
+<< h.spawn_key >>: hyperresearch-fetcher
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste contents of research/runs/<vault_tag>/query.md}}
@@ -246,10 +246,10 @@ Blocked fetches (login walls, bot walls, captchas) were NOT lost — the fetch g
 $HPR escalation list --status queued --tag <vault_tag> -j
 ```
 
-**If queued items exist**, spawn EXACTLY ONE `hyperresearch-browser-fetcher` subagent to drain them (serial, one browser — never spawn two):
+<% if h.browser_lane %>**If queued items exist**, spawn EXACTLY ONE `hyperresearch-browser-fetcher` subagent to drain them (serial, one browser — never spawn two):
 
 ```
-subagent_type: hyperresearch-browser-fetcher
+<< h.spawn_key >>: hyperresearch-browser-fetcher
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste research/runs/<vault_tag>/query.md body}}
@@ -276,7 +276,7 @@ prompt: |
 2. In non-interactive (`-p`) runs where no user can answer: record `$HPR run block <vault_tag> --on human-challenges -j` and CONTINUE the pipeline with everything else — the queue drains on the next `hpr run resume`.
 3. After the user says done: `$HPR escalation retry <id>` each item, re-spawn the browser-fetcher once, then re-run step 2.7's ranking commands so the new sources are scored.
 
-**If the Claude-in-Chrome extension is unavailable**, the queue simply accumulates — report the queued count in your wave summary and move on. Abandoned/queued items are exactly the pre-4.0 status quo (lost sources), never worse.
+**If the browser lane is unavailable**, the queue simply accumulates — report the queued count in your wave summary and move on. Abandoned/queued items are exactly the pre-4.0 status quo (lost sources), never worse.<% else %>**This harness has no browser lane.** Nothing drains the queue here: report the queued count in your wave summary and move on. Queued items are exactly the pre-4.0 status quo (lost sources), never worse, and a later run from a harness with a browser lane can still drain them.<% endif %>
 
 ---
 
@@ -304,7 +304,7 @@ Trigger conditions (ALL three must hold):
 
 Spawn template:
 ```
-subagent_type: hyperresearch-source-analyst
+<< h.spawn_key >>: hyperresearch-source-analyst
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste research/runs/<vault_tag>/query.md body}}
@@ -340,5 +340,5 @@ If you fall short after two waves, proceed anyway but ensure `coverage-gaps.md` 
 
 Return to the entry skill (`hyperresearch`). Tier-based routing:
 
-- **light tier:** Skip directly to step 10 — invoke `Skill(skill: "hyperresearch-10-triple-draft")` (light tier writes a single draft, not the ensemble)
-- **full tier:** Invoke `Skill(skill: "hyperresearch-3-contradiction-graph")`
+- **light tier:** Skip directly to step 10 — invoke `<< h.load_skill("hyperresearch-10-triple-draft") >>` (light tier writes a single draft, not the ensemble)
+- **full tier:** Invoke `<< h.load_skill("hyperresearch-3-contradiction-graph") >>`

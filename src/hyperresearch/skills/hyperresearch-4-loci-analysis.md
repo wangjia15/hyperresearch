@@ -31,11 +31,11 @@ Survey the corpus: `$HPR note list --tag <vault_tag> --all -j` to confirm width 
 
 ## Procedure
 
-1. **Spawn << p.loci_analysts >> `hyperresearch-loci-analyst` subagents in parallel** (ONE message, all << p.loci_analysts >> Task calls). Each analyst gets a letter id in order — `a`, `b`, `c`, ... — and writes to its own output file. All read the same width corpus but return independently.
+1. **Spawn << p.loci_analysts >> `hyperresearch-loci-analyst` subagents in parallel** (<% if h.has_subagents %>ONE message, all << p.loci_analysts >> << h.tool("task") >> calls<% else %>ONE `hyperresearch spawn --batch` call listing all << p.loci_analysts >> prompts<% endif %>). Each analyst gets a letter id in order — `a`, `b`, `c`, ... — and writes to its own output file. All read the same width corpus but return independently.
 
    **Spawn template:**
    ```
-   subagent_type: hyperresearch-loci-analyst
+   << h.spawn_key >>: hyperresearch-loci-analyst
    prompt: |
      RESEARCH QUERY (verbatim, gospel):
      > {{paste research/runs/<vault_tag>/query.md body}}
@@ -130,5 +130,5 @@ Survey the corpus: `$HPR note list --tag <vault_tag> --all -j` to confirm width 
 Return to the entry skill (`hyperresearch`). Invoke step 5:
 
 ```
-Skill(skill: "hyperresearch-5-depth-investigation")
+<< h.load_skill("hyperresearch-5-depth-investigation") >>
 ```

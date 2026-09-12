@@ -65,7 +65,7 @@ The targeted fetch wave in the next step will pull these filings BEFORE the corp
 
    **Spawn template:**
    ```
-   subagent_type: hyperresearch-corpus-critic
+   << h.spawn_key >>: hyperresearch-corpus-critic
    prompt: |
      RESEARCH QUERY (verbatim, gospel):
      > {{paste research/runs/<vault_tag>/query.md body}}
@@ -91,7 +91,7 @@ The targeted fetch wave in the next step will pull these filings BEFORE the corp
 
    **Spawn template:**
    ```
-   subagent_type: hyperresearch-fetcher
+   << h.spawn_key >>: hyperresearch-fetcher
    prompt: |
      RESEARCH QUERY (verbatim, gospel):
      > {{paste research/runs/<vault_tag>/query.md body}}
@@ -137,5 +137,5 @@ The targeted fetch wave in the next step will pull these filings BEFORE the corp
 Return to the entry skill (`hyperresearch`). Invoke step 9:
 
 ```
-Skill(skill: "hyperresearch-9-evidence-digest")
+<< h.load_skill("hyperresearch-9-evidence-digest") >>
 ```

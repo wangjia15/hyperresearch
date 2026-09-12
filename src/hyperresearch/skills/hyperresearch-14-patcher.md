@@ -67,7 +67,7 @@ Spawn ONCE.
 
 **Spawn template:**
 ```
-subagent_type: hyperresearch-patcher
+<< h.spawn_key >>: hyperresearch-patcher
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste research/runs/<vault_tag>/query.md body}}
@@ -115,7 +115,7 @@ Check the patch log when the patcher returns:
 
 - **Did the patcher log a "patch too large" skip?** That means a critic proposed regeneration in patch clothing. If the finding was critical, re-spawn the critic with a tighter suggestion, or address it yourself with multiple small hunks.
 
-- **Is the patch log still the empty stub?** If yes, the patcher failed to log — its Task result will contain the real log inline. Read the Task result, parse out the JSON, and write it to `research/runs/<vault_tag>/patch-log.json` yourself via Bash so downstream lint rules see it.
+- **Is the patch log still the empty stub?** If yes, the patcher failed to log — its <% if h.has_subagents %><< h.tool("task") >> result<% else %>`hyperresearch spawn` output<% endif %> will contain the real log inline. Read that result, parse out the JSON, and write it to `research/runs/<vault_tag>/patch-log.json` yourself via << h.tool("bash") >> so downstream lint rules see it.
 
 ---
 
@@ -154,5 +154,5 @@ For each entry:
 Return to the entry skill (`hyperresearch`). Invoke step 14.5 (cite-check):
 
 ```
-Skill(skill: "hyperresearch-14-5-cite-check")
+<< h.load_skill("hyperresearch-14-5-cite-check") >>
 ```

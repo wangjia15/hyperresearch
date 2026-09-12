@@ -276,7 +276,7 @@ prompt: |
 2. In non-interactive (`-p`) runs where no user can answer: record `$HPR run block <vault_tag> --on human-challenges -j` and CONTINUE the pipeline with everything else — the queue drains on the next `hpr run resume`.
 3. After the user says done: `$HPR escalation retry <id>` each item, re-spawn the browser-fetcher once, then re-run step 2.7's ranking commands so the new sources are scored.
 
-**If the Claude-in-Chrome extension is unavailable**, the queue simply accumulates — report the queued count in your wave summary and move on. Abandoned/queued items are exactly the pre-4.0 status quo (lost sources), never worse.
+**If the browser lane is unavailable**, the queue simply accumulates — report the queued count in your wave summary and move on. Abandoned/queued items are exactly the pre-4.0 status quo (lost sources), never worse.
 
 ---
 

@@ -11,7 +11,7 @@
 
 ---
 
-**Hyperresearch turns Claude Code into a deep research agent: one that currently leads the DeepResearch-Bench RACE leaderboard (benchmarked internally).** A tier-adaptive 16-step pipeline takes one prompt and produces an adversarially-audited report with full source provenance. Every source it reads lands in a persistent, searchable vault, so each session starts smarter than the last.
+**Hyperresearch turns your coding agent into a deep research agent: one that currently leads the DeepResearch-Bench RACE leaderboard (benchmarked internally).** A tier-adaptive 16-step pipeline takes one prompt and produces an adversarially-audited report with full source provenance. Every source it reads lands in a persistent, searchable vault, so each session starts smarter than the last. Runs on Claude Code, OMP, and Pi.
 
 <p align="center">
   <img src="assets/benchmark.png" alt="DeepResearch-Bench top-5 hyperresearch leads the chart ahead of Grep Deep Research, Cellcog Max, nvidia-aiq, Gemini Deep Research, and OpenAI Deep Research" width="780">
@@ -33,22 +33,95 @@
 
 ## Install
 
+From PyPI (released versions):
+
 ```bash
 cd your-project
 pip install hyperresearch && hyperresearch install
 ```
 
-Then `/hyperresearch <anything>` in Claude Code.
+Then `/hyperresearch <anything>` in Claude Code (`/skill:hyperresearch <anything>` on OMP and Pi).
 
 > Python 3.11–3.13. (3.14 not yet supported. Use `pyenv install 3.13`, `uv venv -p 3.13`, or `py -3.13 -m venv .venv`.)
 >
-> Power users: `hyperresearch install --global` makes `/hyperresearch` reachable from every Claude Code session anywhere, at the cost of ~15 lines in every session's system reminder. Per-project install (above) keeps unrelated CC sessions clean.
+> Power users: `hyperresearch install --global` makes the pipeline reachable from every session anywhere, at the cost of ~15 lines in every session's system reminder. Per-project install (above) keeps unrelated sessions clean.
+
+### Install the current development version
+
+Everything in the [Unreleased changelog](CHANGELOG.md) — the multi-harness install, the GLM model mapping, the `spawn` bridge — lives in this repository, ahead of the published package. Install it from a clone:
+
+```bash
+git clone https://github.com/jordan-gibbs/hyperresearch && cd hyperresearch
+python -m venv .venv
+.venv/bin/python -m pip install -e .        # Windows: .venv\Scripts\python -m pip install -e .
+```
+
+The CLI is that interpreter's `hyperresearch`/`hpr` entry point (`.venv/bin/hyperresearch`, or `.venv\Scripts\hyperresearch.exe` on Windows). Use it for the per-project install — a venv also keeps hyperresearch's pinned deps (pydantic, crawl4ai) away from your system Python:
+
+```bash
+cd your-project
+path/to/hyperresearch/.venv/bin/hyperresearch install . --harness omp
+```
+
+The installed skills embed the absolute path of the CLI they were rendered with, so the harness sessions don't need it on PATH.
+
+**Upgrading an existing project** re-runs the same command — install is idempotent: skills and agent files are re-rendered (profile numbers, model selectors), the context file's blurb is refreshed between its markers, and unchanged files are left alone. `--steps-only` refreshes just the 18 step skills; `hyperresearch config agent-docs` refreshes just the context file.
+
+### Harnesses
+
+`hyperresearch install` renders the pipeline for the harness you actually run and writes it into that harness's own layout. It autodetects from the project and user config dirs; `--harness` (repeatable, comma-separated, or `all`) picks explicitly and is remembered in `.hyperresearch/config.toml`.
+
+| Harness | Install target | Start a run | Subagents | Notes |
+|---|---|---|---|---|
+| Claude Code | `.claude/{skills,agents}`, `CLAUDE.md` | `/hyperresearch` | `Task` tool | Full feature set: Chrome escalation lane, `WebSearch`, `TodoWrite`, PreToolUse reminder hook |
+| OMP | `.omp/{skills,agents}`, `AGENTS.md` | `/skill:hyperresearch` | `task` tool | Chrome lane via the `eval` tool's relay browser; reminder ships as `.omp/extensions/hyperresearch/index.ts` |
+| Pi | `.pi/{skills,agents}`, `AGENTS.md` | `/skill:hyperresearch` | `hyperresearch spawn` | No web-search tool, no todo tool, no browser lane — blocked fetches stay queued as escalations |
+
+```bash
+hyperresearch install --harness omp          # one harness
+hyperresearch install --harness claude,pi    # several
+hyperresearch install --harness all --global # every harness, user level
+```
+
+Pi has no subagent tool, so the pipeline's parallelism runs through the bridge: the orchestrator writes each agent prompt to a file and fans a whole wave out in one call.
+
+```bash
+hyperresearch spawn hyperresearch-fetcher --prompt-file wave/fetcher-1.md --json
+hyperresearch spawn --batch wave/wave-1.json --concurrency 4 --json
+```
+
+Each spawn runs `pi -p` with the installed agent file as its system prompt (`HPR_PI_BIN` overrides the binary). Harnesses with a native subagent tool reject the bridge — they don't need it.
+
+#### Which model each step runs on
+
+The profile's ModelMap assigns every agent a tier; the harness turns a tier into a selector it can actually resolve.
+
+| Tier | Steps | Claude Code | OMP | Pi |
+|---|---|---|---|---|
+| reading volume | fetcher, source-analyst, loci-analyst, depth-investigator, corpus-critic, cite-checker, browser-fetcher | `sonnet` | `zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash` | inherits the child's model |
+| judgment | draft-orchestrators, synthesizer, 4 critics, patcher, polish-auditor, readability-recommender | `opus` | `zhipu-coding-plan/glm-5.3, zai/glm-5.3` | inherits the child's model |
+
+OMP selectors are fallback chains: it tries each entry in order and drops back to the parent session's model if none resolves, so a machine without those credentials degrades instead of failing the spawn. Pin your own per vault:
+
+```toml
+# .hyperresearch/config.toml
+[harness.models.omp]
+sonnet = "zhipu-coding-plan/glm-5.3-flash"
+opus = "zhipu-coding-plan/glm-5.3:high"   # thinking suffix allowed
+
+[harness.models.pi]
+opus = "glm-5.3"                          # pi resolves the id fuzzily
+```
+
+An empty value omits the agent's `model:` line entirely (inherit the parent model).
+
+Per-harness detail, including the step-by-step model table: [README-OMP.md](README-OMP.md).
 
 ---
 
 ## The 16-step research pipeline
 
-The entry skill is a thin router. It pins down the canonical research query, then invokes one step skill per phase via Claude Code's `Skill` tool. Each step's procedure loads into context only when that step actually runs. That's what stops a long pipeline from quietly dropping steps as its context rots.
+The entry skill is a thin router. It pins down the canonical research query, then loads one step skill per phase (the `Skill` tool on Claude Code, `skill://` on OMP, a file read on Pi). Each step's procedure loads into context only when that step actually runs. That's what stops a long pipeline from quietly dropping steps as its context rots.
 
 | # | Step | What it does | Tiers |
 |---|---|---|---|
@@ -112,7 +185,7 @@ hyperresearch run status -j                                      # see what step
 
 ### The two load-bearing principles
 
-1. **Patch, never regenerate.** After step 11 produces the synthesized report (or step 10 for light tier), the only modifications are surgical Edit hunks. The patcher and polish auditor are tool-locked to `[Read, Edit]` at the Claude Code allowlist level so they physically cannot Write a new draft. Per-hunk caps make "just rewrite it" mechanically impossible. Critic findings that don't fit a small hunk escalate as structural issues.
+1. **Patch, never regenerate.** After step 11 produces the synthesized report (or step 10 for light tier), the only modifications are surgical Edit hunks. The patcher and polish auditor are tool-locked to `[Read, Edit]` in their agent definitions so they physically cannot Write a new draft. Per-hunk caps make "just rewrite it" mechanically impossible. Critic findings that don't fit a small hunk escalate as structural issues.
 
 2. **Canonical research query is gospel.** The verbatim user prompt is persisted to `research/runs/<vault_tag>/query.md` once and re-read by every subsequent step and every spawned subagent. Wrapper requirements (save paths, citation format, terminal sections) are a separate contract.
 
@@ -190,7 +263,7 @@ hyperresearch watch                   # auto-sync while you edit in your own edi
 
 ---
 
-## Use the vault outside Claude Code
+## Use the vault outside a coding agent
 
 **An MCP server.** `pip install hyperresearch[mcp]`, then `hyperresearch mcp` speaks stdio, so Claude Desktop, Cursor, or anything else that speaks MCP can work the same vault. Thirteen tools: `search_notes`, `read_note`, `read_many`, `list_notes`, `get_backlinks`, `get_hubs`, `vault_status`, `lint_vault`, `check_source`, `list_sources`, `fetch_url`, `create_note`, `update_note`.
 
@@ -371,7 +444,7 @@ Publishers block their own open-access PDFs often enough that one attempt isn't 
 ## Requirements
 
 - Python 3.11+
-- [Claude Code](https://claude.com/claude-code)
+- One of: [Claude Code](https://claude.com/claude-code), [OMP](https://github.com/can1357/oh-my-pi), or [Pi](https://github.com/badlogic/pi-mono)
 
 ---
 

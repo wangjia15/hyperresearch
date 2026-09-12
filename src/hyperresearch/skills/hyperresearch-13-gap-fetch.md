@@ -46,7 +46,7 @@ Read these inputs:
 
    **Spawn template:**
    ```
-   subagent_type: hyperresearch-fetcher
+   << h.spawn_key >>: hyperresearch-fetcher
    prompt: |
      RESEARCH QUERY (verbatim, gospel):
      > {{paste research/runs/<vault_tag>/query.md body}}
@@ -90,5 +90,5 @@ Read these inputs:
 Return to the entry skill (`hyperresearch`). Invoke step 14:
 
 ```
-Skill(skill: "hyperresearch-14-patcher")
+<< h.load_skill("hyperresearch-14-patcher") >>
 ```

@@ -73,7 +73,7 @@ If `pipeline_tier == "light"`: SKIP step 10.1 — 10.3 below and follow this sec
 
 4. **Hygiene.** No YAML frontmatter on the final report. No pipeline vocabulary in prose ("hyperresearch", "evidence digest", "comparisons.md", "committed reading", etc.). When `citation_style == "wikilink"`, `[[<source-note-id>]]` markers ARE the citation system and must be preserved — only strip wikilinks that point at workspace artifacts (interim-*, scaffold, comparisons). Step 15 (polish) is a backstop, not a license to leak.
 
-5. **Exit and route.** Once `research/notes/final_report_<vault_tag>.md` is written, return to the entry skill and invoke `Skill(skill: "hyperresearch-15-polish")`. Light tier skips steps 11–14 entirely.
+5. **Exit and route.** Once `research/notes/final_report_<vault_tag>.md` is written, return to the entry skill and invoke `<< h.load_skill("hyperresearch-15-polish") >>`. Light tier skips steps 11–14 entirely.
 
 ---
 
@@ -141,11 +141,11 @@ Write the 3 angle assignments to `research/runs/<vault_tag>/temp/draft-angles.md
 
 ## Step 10.3 — Spawn << p.draft_count >> draft sub-orchestrators in parallel
 
-**Spawn << p.draft_count >> `hyperresearch-draft-orchestrator` subagents in ONE message.** This is true parallel execution. Each gets a different `draft_id`, `analytical_angle`, and (CRUCIALLY) a different `must_read_note_ids` array.
+<% if h.has_subagents %>**Spawn << p.draft_count >> `hyperresearch-draft-orchestrator` subagents in ONE message.**<% else %>**Run << p.draft_count >> `hyperresearch-draft-orchestrator` agents in ONE `hyperresearch spawn --batch` call.**<% endif %> This is true parallel execution. Each gets a different `draft_id`, `analytical_angle`, and (CRUCIALLY) a different `must_read_note_ids` array.
 
 **Spawn template:**
 ```
-subagent_type: hyperresearch-draft-orchestrator
+<< h.spawn_key >>: hyperresearch-draft-orchestrator
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste research/runs/<vault_tag>/query.md body}}
@@ -222,5 +222,5 @@ When all 3 sub-orchestrators return:
 
 Return to the entry skill (`hyperresearch`). Tier-based routing:
 
-- **light tier:** You already wrote `research/notes/final_report_<vault_tag>.md` directly. Skip steps 11-14 (no synthesis, no critics, no patcher) and invoke `Skill(skill: "hyperresearch-15-polish")`.
-- **full tier:** Invoke `Skill(skill: "hyperresearch-11-synthesize")`.
+- **light tier:** You already wrote `research/notes/final_report_<vault_tag>.md` directly. Skip steps 11-14 (no synthesis, no critics, no patcher) and invoke `<< h.load_skill("hyperresearch-15-polish") >>`.
+- **full tier:** Invoke `<< h.load_skill("hyperresearch-11-synthesize") >>`.

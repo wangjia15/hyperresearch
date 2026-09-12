@@ -81,9 +81,11 @@ class DedupSettings:
 class ChromeSettings:
     """Browser-lane escalation behavior ([chrome] section).
 
-    The Chrome lane drives the user's real browser (via Claude-in-Chrome)
-    for sources headless crawling can't reach. `enabled` gates ENQUEUEING
-    of blocked fetches; draining requires the Claude-in-Chrome extension.
+    The Chrome lane drives the user's real browser for sources headless
+    crawling can't reach. `enabled` gates ENQUEUEING of blocked fetches;
+    draining needs a harness with a browser lane (Claude-in-Chrome on Claude
+    Code, the `eval` tool's relay browser on OMP). Where there is none, the
+    queue simply accumulates.
     Hard scope boundary: CAPTCHAs/2FA/logins are ALWAYS handed to the human
     (`needs_human`) — never solved automatically.
     """
@@ -246,6 +248,14 @@ class VaultConfig:
     # so that saving config never destroys user-defined profiles.
     profile_overlays: dict = field(default_factory=dict)
 
+    # Harnesses this vault installs the pipeline into ([harness] section):
+    # any of "claude", "omp", "pi". Empty means "autodetect at install time".
+    harness_targets: list[str] = field(default_factory=list)
+    # Per-harness model selector overrides ([harness.models.<id>] tables):
+    # profile model alias (haiku/sonnet/opus) -> the harness's own selector.
+    # An empty value omits the agent's `model:` line (inherit parent model).
+    harness_models: dict = field(default_factory=dict)
+
     # Behavior settings sections
     fetch: FetchSettings = field(default_factory=FetchSettings)
     junk: JunkGates = field(default_factory=JunkGates)
@@ -295,6 +305,12 @@ class VaultConfig:
             web_profile=web.get("profile", cls.web_profile),
             web_magic=web.get("magic", cls.web_magic),
             pipeline_profile=pipeline.get("profile", cls.pipeline_profile),
+            harness_targets=list(data.get("harness", {}).get("targets", [])),
+            harness_models={
+                harness_id: dict(aliases)
+                for harness_id, aliases in data.get("harness", {}).get("models", {}).items()
+                if isinstance(aliases, dict)
+            },
             profile_overlays=data.get("profile", {}),
             fetch=_build_section(FetchSettings, data.get("fetch", {})),
             junk=_build_section(JunkGates, data.get("junk", {})),
@@ -364,7 +380,20 @@ class VaultConfig:
             "[pipeline]",
             f'profile = "{self.pipeline_profile}"',
             "",
+            "# Harnesses `hpr install` targets: any of claude, omp, pi.",
+            "# Empty = autodetect (project config dirs, then user-level dirs).",
+            "[harness]",
+            "targets = ["
+            + ", ".join(f'"{t}"' for t in self.harness_targets)
+            + "]",
+            "",
         ]
+        for harness_id, aliases in self.harness_models.items():
+            if not aliases:
+                continue
+            lines.append(f"[harness.models.{harness_id}]")
+            lines += [f'{alias} = "{value}"' for alias, value in aliases.items()]
+            lines.append("")
         lines += self._section_lines("fetch", self.fetch)
         lines += self._section_lines("junk", self.junk)
         lines += self._section_lines("assets", self.assets)
