@@ -24,6 +24,8 @@ draco-bench/
 # in src/hyperresearch/skills/ (skills) and src/hyperresearch/core/hooks.py
 # (agent templates).
 .claude/
+.omp/
+.pi/
 CLAUDE.md
 AGENTS.md
 GEMINI.md
