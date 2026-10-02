@@ -7,7 +7,7 @@ description: >
   table, the cite-checker agent judges the sampled remainder, and a second
   small patcher pass applies the findings. Runs AFTER step 14 (the patcher
   moved text and citations; audit what will actually ship) and BEFORE step
-  15 (polish sees the corrected text). Invoked via Skill tool.
+  15 (polish sees the corrected text). Invoked via <% if platform == "codex" %>step-file read<% else %>Skill tool<% endif %>.
 ---
 
 # Step 14.5 — Cite-check (citation-sentence binding verification)
@@ -29,7 +29,7 @@ Read these inputs:
 ## Step 14.5.1 — Extract + mechanical triage
 
 ```bash
-$HPR citecheck extract <vault_tag> -j
+{hpr_path} citecheck extract <vault_tag> -j
 ```
 
 This parses every (sentence, citation) pair from the report — `[N]` markers (including grouped `[7, 12]`, one pair per source number) and `[[note-id]]` styles — and auto-passes pairs whose numbers or wording the cited note's extracted claims already confirm. Output: `research/runs/<vault_tag>/cite-check-pairs.json` with:
@@ -39,16 +39,16 @@ This parses every (sentence, citation) pair from the report — `[N]` markers (i
 
 **Dangling citations are findings immediately** — no agent needed. Each one becomes a `critical` finding (fabricated or mangled citation).
 
-**If `sampled_for_llm` is empty and there are no dangling citations:** write an empty findings file `[]` to `research/runs/<vault_tag>/cite-check-findings.json`, record `$HPR run step <vault_tag> 14.5 --status done -j`, and proceed to step 15. Done.
+**If `sampled_for_llm` is empty and there are no dangling citations:** write an empty findings file `[]` to `research/runs/<vault_tag>/cite-check-findings.json`, record `{hpr_path} run step <vault_tag> 14.5 --status done -j`, and proceed to step 15. Done.
 
 ---
 
 ## Step 14.5.2 — Spawn the cite-checker
 
-Spawn ONE `hyperresearch-cite-checker` subagent (two in parallel with split index ranges when `sampled_for_llm` exceeds ~40 pairs):
+Spawn ONE `hyperresearch-cite-checker` subagent<% if platform == "codex" %> (custom agent `.codex/agents/hyperresearch-cite-checker.toml`)<% else %><% endif %> (two in parallel with split index ranges when `sampled_for_llm` exceeds ~40 pairs)<% if platform == "codex" %> and wait for it (or both) to finish<% else %><% endif %>:
 
 ```
-<< h.spawn_key >>: hyperresearch-cite-checker
+<% if platform == "codex" %>custom_agent: hyperresearch-cite-checker   # spawn the custom agent defined in .codex/agents/hyperresearch-cite-checker.toml<% else %><< h.spawn_key >>: hyperresearch-cite-checker<% endif %>
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste research/runs/<vault_tag>/query.md body}}
@@ -73,7 +73,7 @@ When splitting across two checkers, give each its own findings path (`cite-check
 
 ## Step 14.5.3 — Second patcher pass
 
-Append the dangling-citation findings (from 14.5.1) to the findings file, then reuse the step 14 machinery exactly: spawn ONE `hyperresearch-patcher` (tool-locked Read + Edit) with `research/runs/<vault_tag>/cite-check-findings.json` as its findings input and `research/runs/<vault_tag>/cite-check-patch-log.json` pre-stubbed:
+Append the dangling-citation findings (from 14.5.1) to the findings file, then reuse the step 14 machinery exactly: spawn ONE `hyperresearch-patcher` (<% if platform == "codex" %>read + patch only<% else %>tool-locked Read + Edit<% endif %>) with `research/runs/<vault_tag>/cite-check-findings.json` as its findings input and `research/runs/<vault_tag>/cite-check-patch-log.json` pre-stubbed:
 
 ```json
 {"total_findings": 0, "applied": [], "skipped": [], "conflicts": [], "orchestrator_escalated": []}
@@ -90,8 +90,8 @@ Fix repertoire (in the findings' `suggested_fix`): swap to `correct_note_id`, so
 - `research/runs/<vault_tag>/cite-check-pairs.json` exists
 - `research/runs/<vault_tag>/cite-check-findings.json` exists (possibly `[]`)
 - If findings were non-empty: `cite-check-patch-log.json` shows every `critical` finding applied or escalated
-- Manifest: `$HPR run step <vault_tag> 14.5 --status done -j`
+- Manifest: `{hpr_path} run step <vault_tag> 14.5 --status done -j`
 
 ## Next step
 
-Return to the entry skill and invoke `<< h.load_skill("hyperresearch-15-polish") >>`.
+Return to the entry skill and invoke `<% if platform == "codex" %>cat .hyperresearch/codex/steps/hyperresearch-15-polish.md<% else %><< h.load_skill("hyperresearch-15-polish") >><% endif %>`.

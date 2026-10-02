@@ -5,7 +5,7 @@ description: >
   subagents that read the width corpus and identify 1-<< p.loci_max >> specific
   questions where depth investigation will pay off. Deduplicates and
   scores each locus on importance/uncertainty/disagreement/decision_impact,
-  then allocates source budgets dynamically. Invoked via Skill tool from
+  then allocates source budgets dynamically. Invoked via <% if platform == "codex" %>step-file read<% else %>Skill tool<% endif %> from
   the entry skill (full tier only).
 ---
 
@@ -25,17 +25,17 @@ Read these inputs:
 - `research/runs/<vault_tag>/temp/contradiction-graph.json` — ranked fight clusters (if step 3 ran)
 - `research/runs/<vault_tag>/temp/coverage-gaps.md` — which atomic items have weak coverage
 
-Survey the corpus: `$HPR note list --tag <vault_tag> --all -j` to confirm width sweep is complete.
+Survey the corpus: `{hpr_path} note list --tag <vault_tag> --all -j` to confirm width sweep is complete.
 
 ---
 
 ## Procedure
 
-1. **Spawn << p.loci_analysts >> `hyperresearch-loci-analyst` subagents in parallel** (<% if h.has_subagents %>ONE message, all << p.loci_analysts >> << h.tool("task") >> calls<% else %>ONE `hyperresearch spawn --batch` call listing all << p.loci_analysts >> prompts<% endif %>). Each analyst gets a letter id in order — `a`, `b`, `c`, ... — and writes to its own output file. All read the same width corpus but return independently.
+1. **Spawn << p.loci_analysts >> `hyperresearch-loci-analyst` subagents in parallel** (<% if platform == "codex" %>custom agent `.codex/agents/hyperresearch-loci-analyst.toml` — spawn all << p.loci_analysts >> now, in parallel, and wait for all of them<% else %><% if h.has_subagents %>ONE message, all << p.loci_analysts >> << h.tool("task") >> calls<% else %>ONE `hyperresearch spawn --batch` call listing all << p.loci_analysts >> prompts<% endif %><% endif %>). Each analyst gets a letter id in order — `a`, `b`, `c`, ... — and writes to its own output file. All read the same width corpus but return independently.
 
    **Spawn template:**
    ```
-   << h.spawn_key >>: hyperresearch-loci-analyst
+   <% if platform == "codex" %>custom_agent: hyperresearch-loci-analyst   # spawn the custom agent defined in .codex/agents/hyperresearch-loci-analyst.toml<% else %><< h.spawn_key >>: hyperresearch-loci-analyst<% endif %>
    prompt: |
      RESEARCH QUERY (verbatim, gospel):
      > {{paste research/runs/<vault_tag>/query.md body}}
@@ -106,7 +106,7 @@ Survey the corpus: `$HPR note list --tag <vault_tag> --all -j` to confirm width 
 7. **Reconsider `inference_depth` against the actual corpus.** Step 1 set it provisionally from the query alone; you have now seen what the surface web actually holds. Upgrade to `deep` when the corpus shows the load-bearing questions are underdetermined by clearly-published sources — high-uncertainty loci where the missing evidence is gray literature, filings, or unpublished figures rather than papers nobody fetched yet. Downgrade to `surface` only if step 1 chose `deep` and the corpus turned out rich and univocal. To change it:
 
    ```bash
-   $HPR levers set <vault_tag> inference_depth=deep --rerender -j
+   {hpr_path} levers set <vault_tag> inference_depth=deep --rerender -j
    ```
 
    The `--rerender` refreshes the shim files so step 5's investigators inherit the new posture. If the step-1 value still fits, do nothing.
@@ -130,5 +130,5 @@ Survey the corpus: `$HPR note list --tag <vault_tag> --all -j` to confirm width 
 Return to the entry skill (`hyperresearch`). Invoke step 5:
 
 ```
-<< h.load_skill("hyperresearch-5-depth-investigation") >>
+<% if platform == "codex" %>cat .hyperresearch/codex/steps/hyperresearch-5-depth-investigation.md<% else %><< h.load_skill("hyperresearch-5-depth-investigation") >><% endif %>
 ```

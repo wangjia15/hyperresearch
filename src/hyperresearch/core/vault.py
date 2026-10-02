@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Sequence
 from pathlib import Path
@@ -17,6 +18,33 @@ DB_FILE = "hyperresearch.db"
 
 class VaultError(Exception):
     pass
+
+
+class InvalidRunTagError(VaultError):
+    """A run tag that is not a plain slug (path separators, `..`, absolute paths)."""
+
+
+# A run tag is a slug: what `hpr vault-tag` mints, plus underscore and dot so
+# hand-written tags survive. No separators, so it can only ever name a child
+# of research/runs/; the leading character rule rejects `.` and `..`.
+RUN_TAG_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
+
+
+def validate_run_tag(vault_tag: str) -> str:
+    """Return the tag unchanged, or raise InvalidRunTagError.
+
+    Every run command joins the tag onto research/runs/, and pathlib replaces
+    the base on an absolute segment, so without this `run init ../../x` or
+    `run init C:/anything` scaffolds a workspace outside the vault and every
+    later subcommand follows it there (#116).
+    """
+    if not isinstance(vault_tag, str) or not RUN_TAG_RE.fullmatch(vault_tag):
+        raise InvalidRunTagError(
+            f"invalid run tag {vault_tag!r}: a tag is a slug of letters, digits, "
+            "'-', '_' and '.', starting with a letter or digit (mint one with "
+            "`hyperresearch vault-tag <slug>`)"
+        )
+    return vault_tag
 
 
 class Vault:
@@ -87,7 +115,7 @@ class Vault:
         return self.research_dir / "runs"
 
     def run_dir(self, vault_tag: str) -> Path:
-        return self.runs_dir / vault_tag
+        return self.runs_dir / validate_run_tag(vault_tag)
 
     @property
     def templates_dir(self) -> Path:
@@ -116,8 +144,17 @@ class Vault:
         name: str = "Research Base",
         research_dir: str = "research",
         harnesses: Sequence[Harness] | None = None,
+        platforms: tuple[str, ...] = ("claude",),
     ) -> Vault:
-        """Initialize a new vault at the given path."""
+        """Initialize a new vault at the given path.
+
+        `harnesses` are the harnesses whose context file gets the
+        hyperresearch blurb (Claude Code alone when the caller names none).
+        `platforms` names the agent runtimes outside the harness system:
+        claude rides the harness path (CLAUDE.md by default), while a
+        Codex-only install passes platforms=("codex",) so no CLAUDE.md
+        appears — only AGENTS.md.
+        """
         root = root.resolve()
         hyperresearch_dir = root / HYPERRESEARCH_DIR
 
@@ -158,9 +195,14 @@ class Vault:
         )
 
         # Inject the context file of each target harness (Claude Code alone
-        # when the caller names none).
+        # when the caller names none), plus the docs of any non-harness
+        # platform (codex -> AGENTS.md).
         from hyperresearch.core.agent_docs import inject_agent_docs
-        inject_agent_docs(root, harnesses=harnesses)
+
+        if "claude" in platforms:
+            inject_agent_docs(root, harnesses=harnesses)
+        if "codex" in platforms:
+            inject_agent_docs(root, platform="codex")
 
         return vault
 

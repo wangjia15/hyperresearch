@@ -1,6 +1,6 @@
 """Tests for wiki-link target validation — citation-footnote edge cases."""
 
-from hyperresearch.core.patterns import is_valid_wiki_link_target
+from hyperresearch.core.patterns import is_valid_wiki_link_target, strip_code
 
 
 def test_empty_and_whitespace_rejected():
@@ -224,6 +224,30 @@ def test_template_placeholder_check_is_linear():
         assert time.perf_counter() - started < 1.0
 
 
+def test_code_strip_is_linear_on_backtick_floods():
+    # Runs on every fetched body before link extraction (#140). A
+    # backreference regex matching closing fences to opening ones re-scans
+    # to the end of the text for every unclosed run: the staircase of
+    # distinct, never-closed run lengths is the worst case for that shape.
+    import time
+
+    floods = {
+        "`": "`" * 300_000,
+        "```\\n": "```\n" * 75_000,
+        "`a": "`a" * 150_000,
+        "``` ": "``` " * 75_000,
+        "unclosed ````": "````\n" + "```\n" * 75_000,
+        "never-closed openers": "```x\n" * 75_000,
+        "descending openers": "".join("`" * n + "\n" for n in range(1500, 2, -1)),
+        "staircase": "".join("`" * n + "a" for n in range(1500, 0, -1)),
+    }
+    for name, flood in floods.items():
+        started = time.perf_counter()
+        strip_code(flood)
+        elapsed = time.perf_counter() - started
+        assert elapsed < 1.0, f"{name!r} flood took {elapsed:.2f}s"
+
+
 def test_interior_open_bracket_never_matches():
     # Previously matched as target `t.IO[t.Any` and was rejected downstream
     # by the bracket-balance check; now the pattern itself refuses it.
@@ -233,3 +257,38 @@ def test_interior_open_bracket_never_matches():
     assert _targets("[[[x]]") == ["x"]
     # Ordinary links and aliases are untouched.
     assert _targets("[[note-id]] and [[other|Shown]]") == ["note-id", "other"]
+
+
+def test_shell_fragments_rejected():
+    # When a fetcher flattens <pre> content to prose, bash test syntax
+    # reaches this extractor and is lexically a wiki-link; `repair` then
+    # materialises junk notes named after shell fragments. Every shape below
+    # passed the validator before this check. (`"${HOSTID}"`-style refs are
+    # already rejected by the template-placeholder check.)
+    assert not is_valid_wiki_link_target('-n "$kernel"')
+    assert not is_valid_wiki_link_target('! -f "$KERNELDESTINATION"')
+    assert not is_valid_wiki_link_target("$# -lt 1")
+    assert not is_valid_wiki_link_target("-z foo")
+    assert not is_valid_wiki_link_target("a=b")
+    assert not is_valid_wiki_link_target("back`tick")
+    assert not is_valid_wiki_link_target("x < y; rm")
+
+
+def test_path_traversal_rejected():
+    # Never a note reference, whatever downstream writes the file.
+    assert not is_valid_wiki_link_target("../../../tmp/pwned")
+    assert not is_valid_wiki_link_target("a/../../b")
+    assert not is_valid_wiki_link_target("a/..")
+    assert not is_valid_wiki_link_target("..")
+    assert not is_valid_wiki_link_target(".")
+
+
+def test_shell_shaped_but_legitimate_refs_still_accepted():
+    # The net is partial BY DESIGN: shapes indistinguishable from real ids
+    # pass, and titles with mid-string slashes or punctuation stay legal.
+    assert is_valid_wiki_link_target("1-d")
+    assert is_valid_wiki_link_target("hostid-00000000")
+    assert is_valid_wiki_link_target("UEFI/Secure Boot")  # real wiki title shape
+    assert is_valid_wiki_link_target("C. elegans")
+    assert is_valid_wiki_link_target("yahoo! finance")  # '!' mid-string stays legal
+    assert is_valid_wiki_link_target("e.g. v1.2")

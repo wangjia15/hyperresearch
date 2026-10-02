@@ -5,8 +5,8 @@ description: >
   claims across the corpus. Ranked fight clusters feed step 4's loci
   analysis so that loci emerge from where evidence actually forks, not
   from agent intuition. Also identifies consensus claims (3+ independent
-  agreements) for confident assertion in the draft. Invoked via Skill
-  tool from the entry skill after step 2 completes.
+  agreements) for confident assertion in the draft. Invoked via <% if platform == "codex" %>step-file read<% else %>Skill
+  tool<% endif %> from the entry skill after step 2 completes.
 ---
 
 # Step 3 — Contradiction graph
@@ -55,7 +55,7 @@ If no claims files exist (e.g., fetchers didn't produce them), skip this step en
 
 5. **Write `research/runs/<vault_tag>/temp/contradiction-graph.json`** — array of ranked fight clusters.
 
-6. **Identify consensus claims.** Claims where 3+ INDEPENDENT sources agree. Independence is computed, not assumed: run `$HPR sources independence --tag <vault_tag> -j` first — it clusters syndicated copies (same canonical URL, near-duplicate bodies, shared wire-service boilerplate) and scores members `1/cluster_size`. **Count each cluster as ONE voice** (sum of independence scores ≥ 3.0, not raw source count ≥ 3). Write consensus claims to `research/runs/<vault_tag>/temp/consensus-claims.json`. These are the "settled ground" the draft can assert confidently without hedging.
+6. **Identify consensus claims.** Claims where 3+ INDEPENDENT sources agree. Independence is computed, not assumed: run `{hpr_path} sources independence --tag <vault_tag> -j` first — it clusters syndicated copies (same canonical URL, near-duplicate bodies, shared wire-service boilerplate) and scores members `1/cluster_size`. **Count each cluster as ONE voice** (sum of independence scores ≥ 3.0, not raw source count ≥ 3). Write consensus claims to `research/runs/<vault_tag>/temp/consensus-claims.json`. These are the "settled ground" the draft can assert confidently without hedging.
 
 ---
 
@@ -70,4 +70,4 @@ If no claims files exist (e.g., fetchers didn't produce them), skip this step en
 
 Return to the entry skill (`hyperresearch`). Tier-based routing:
 
-- **full tier:** Invoke `<< h.load_skill("hyperresearch-4-loci-analysis") >>`
+- **full tier:** Invoke `<% if platform == "codex" %>cat .hyperresearch/codex/steps/hyperresearch-4-loci-analysis.md<% else %><< h.load_skill("hyperresearch-4-loci-analysis") >><% endif %>`

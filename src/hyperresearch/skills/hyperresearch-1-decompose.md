@@ -6,7 +6,7 @@ description: >
   and produces the coverage matrix that downstream steps depend on. The
   required_section_headings field this step produces is the single
   highest-leverage input for instruction-following scores. Invoked via
-  Skill tool from the entry skill (hyperresearch).
+  <% if platform == "codex" %>step-file read<% else %>Skill tool<% endif %> from the entry skill (hyperresearch).
 ---
 
 # Step 1 — Prompt decomposition
@@ -183,7 +183,7 @@ Read both before starting. The vault_tag is in the scaffold's "Run config" secti
 10. **Render the lever shims:**
 
     ```bash
-    $HPR levers render <vault_tag> -j
+    {hpr_path} levers render <vault_tag> -j
     ```
 
     This writes `research/runs/<vault_tag>/shims/{research,drafting,critics,polish}.md` from the levers block. Later steps paste these files VERBATIM into subagent spawn prompts — you never compose or edit shim text yourself. If the command errors on an enum value, fix the levers block in the decomposition and re-run it.
@@ -194,7 +194,7 @@ Read both before starting. The vault_tag is in the scaffold's "Run config" secti
 
 - `research/runs/<vault_tag>/prompt-decomposition.json` exists, is valid JSON, every atomic item traces to the research_query
 - `pipeline_tier` + `response_format` + `citation_style` are all set, and the `levers` block is present (register, domain_notes, inference_depth)
-- `$HPR levers render` succeeded — all four shim files exist under `research/runs/<vault_tag>/shims/`
+- `{hpr_path} levers render` succeeded — all four shim files exist under `research/runs/<vault_tag>/shims/`
 - `research/runs/<vault_tag>/temp/coverage-matrix.md` exists with **zero `Gap? = YES` rows**
 - `research/runs/<vault_tag>/scaffold.md` includes a Tier rationale subsection
 
@@ -205,7 +205,7 @@ Read both before starting. The vault_tag is in the scaffold's "Run config" secti
 Return to the entry skill (`hyperresearch`). Read `research/runs/<vault_tag>/prompt-decomposition.json` to learn the tier, then invoke step 2:
 
 ```
-<< h.load_skill("hyperresearch-2-width-sweep") >>
+<% if platform == "codex" %>cat .hyperresearch/codex/steps/hyperresearch-2-width-sweep.md<% else %><< h.load_skill("hyperresearch-2-width-sweep") >><% endif %>
 ```
 
 Step 2 runs for ALL tiers.

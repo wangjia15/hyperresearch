@@ -5,7 +5,7 @@ description: >
   subagents in parallel (one per scored locus), each producing one
   interim note with a Committed Position section. Investigators read
   full source bodies for their locus and may fetch additional sources
-  within their source_budget. Invoked <% if h.supports("skill") %>via Skill tool <% endif %>from the entry
+  within their source_budget. Invoked <% if platform == "codex" %>via step-file read<% else %><% if h.supports("skill") %>via Skill tool <% endif %><% endif %>from the entry
   skill (full tier only).
 ---
 
@@ -29,11 +29,11 @@ Read these inputs:
 
 ## Procedure
 
-1. **Spawn K `hyperresearch-depth-investigator` subagents in parallel** (<% if h.has_subagents %>ONE message, all << h.tool("task") >> calls<% else %>ONE `hyperresearch spawn --batch` call listing every locus prompt<% endif %>). One per locus with `source_budget > 0`, capped at << p.investigator_max >>.
+1. **Spawn K `hyperresearch-depth-investigator` subagents in parallel** (<% if platform == "codex" %>custom agent `.codex/agents/hyperresearch-depth-investigator.toml` — spawn all K now, in parallel, and wait for all of them<% else %><% if h.has_subagents %>ONE message, all << h.tool("task") >> calls<% else %>ONE `hyperresearch spawn --batch` call listing every locus prompt<% endif %><% endif %>). One per locus with `source_budget > 0`, capped at << p.investigator_max >>.
 
    **Spawn template:**
    ```
-   << h.spawn_key >>: hyperresearch-depth-investigator
+   <% if platform == "codex" %>custom_agent: hyperresearch-depth-investigator   # spawn the custom agent defined in .codex/agents/hyperresearch-depth-investigator.toml<% else %><< h.spawn_key >>: hyperresearch-depth-investigator<% endif %>
    prompt: |
      RESEARCH QUERY (verbatim, gospel):
      > {{paste research/runs/<vault_tag>/query.md body}}
@@ -81,11 +81,11 @@ Read these inputs:
 
 4. **Read the interim notes.** After all return, list them:
    ```bash
-   $HPR note list --tag <vault_tag> --type interim --all --json
+   {hpr_path} note list --tag <vault_tag> --type interim --all --json
    ```
    Then batch-read them:
    ```bash
-   $HPR note show <id1> <id2> ... -j
+   {hpr_path} note show <id1> <id2> ... -j
    ```
    Hold the Committed Position sections in your context — they are the load-bearing input to step 6 (cross-locus reconciliation).
 
@@ -107,5 +107,5 @@ If >50% of investigators failed: stop and escalate.
 Return to the entry skill (`hyperresearch`). Invoke step 6:
 
 ```
-<< h.load_skill("hyperresearch-6-cross-locus-reconcile") >>
+<% if platform == "codex" %>cat .hyperresearch/codex/steps/hyperresearch-6-cross-locus-reconcile.md<% else %><< h.load_skill("hyperresearch-6-cross-locus-reconcile") >><% endif %>
 ```

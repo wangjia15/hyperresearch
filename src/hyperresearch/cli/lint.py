@@ -95,7 +95,7 @@ def _latest_report(vault):
         return None, None
 
 
-_QUOTE_SPAN_RE = re.compile(r"[\"“]([^\"“”]{20,600})[\"”]")
+_QUOTE_SPAN_RE = re.compile(r'[\"“]([^\"“”]{1,600}?)[\"”]')
 _REPORT_NUMBER_RE = re.compile(r"\d[\d,]*\.\d+%?|\d[\d,]{3,}%?|\d[\d,]*%")
 
 
@@ -973,7 +973,7 @@ def lint(
                         f"Vault has {len(source_rows)} fetched source notes but ZERO "
                         f"`*Suggested by [[...]]` breadcrumbs. The bouncing reading loop never "
                         f"fired — every fetch was a flat batch with no link back to the source "
-                        f"that proposed it. Use `$HPR fetch ... --suggested-by <source-note-id> "
+                        f"that proposed it. Use `hyperresearch fetch ... --suggested-by <source-note-id> "
                         f"--suggested-by-reason \"<why>\"` for every follow-up fetch."
                     ),
                 })
@@ -1801,7 +1801,7 @@ def lint(
                         f"The finding was '{guard['description']}'. The draft's `fixed_at` "
                         f"marker does not match the vault's actual state — you must fix the "
                         f"underlying issue (not just the bookkeeping). Run "
-                        f"`$HPR lint --rule {guard['rule']} -j` to see what's still broken."
+                        f"`hyperresearch lint --rule {guard['rule']} -j` to see what's still broken."
                     ),
                 })
 

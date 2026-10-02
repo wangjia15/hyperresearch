@@ -5,7 +5,7 @@ description: >
   (breadth / depth / adversarial lenses) followed by parallel fetcher waves.
   Achieves comprehensive topical coverage with << p.source_target|dash >> curated sources for
   full tier. Includes coverage check, evidence redundancy audit,
-  and source count gating. Invoked via Skill tool from the entry skill
+  and source count gating. Invoked via <% if platform == "codex" %>step-file read<% else %>Skill tool<% endif %> from the entry skill
   after step 1 completes.
 ---
 
@@ -121,19 +121,19 @@ Before batching URLs, score each candidate URL on six dimensions (0–3 each, ma
 
 Write to `research/runs/<vault_tag>/temp/scored-urls.md`.
 
-**Scores travel with the URLs.** When you assign batches (step 2.4), include each URL's composite utility score next to it. Fetchers pass it to `$HPR fetch --utility-score <N>` so the score persists into note frontmatter — it becomes one input to the vault's composite `quality_score`, which step 10 uses for ranked curation.
+**Scores travel with the URLs.** When you assign batches (step 2.4), include each URL's composite utility score next to it. Fetchers pass it to `{hpr_path} fetch --utility-score <N>` so the score persists into note frontmatter — it becomes one input to the vault's composite `quality_score`, which step 10 uses for ranked curation.
 
 ---
 
 ## Step 2.4 — Parallel fetcher waves
 
-<% if h.has_subagents %>**Wave 1 (main wave):** Spawn **<< p.wave1_fetchers|dash >> fetcher subagents in ONE message** — true parallel execution. Each fetcher gets its own non-overlapping batch.<% else %>**Wave 1 (main wave):** Run **<< p.wave1_fetchers|dash >> fetchers in ONE `hyperresearch spawn --batch` call** — true parallel execution. Write each fetcher's prompt to `research/runs/<vault_tag>/spawn/fetcher-<n>.md`, list them in `research/runs/<vault_tag>/spawn/wave-1.json` as `[{"agent": "hyperresearch-fetcher", "prompt_file": "<path>"}, ...]`, then run `hyperresearch spawn --batch research/runs/<vault_tag>/spawn/wave-1.json --json`. Each fetcher gets its own non-overlapping batch.<% endif %>
+**Wave 1 (main wave):** <% if platform == "codex" %>Spawn **<< p.wave1_fetchers|dash >> `hyperresearch-fetcher` custom-agent subagents (`.codex/agents/hyperresearch-fetcher.toml`) — spawn them all now, in parallel, and wait for all of them** — true parallel execution.<% else %><% if h.has_subagents %>Spawn **<< p.wave1_fetchers|dash >> fetcher subagents in ONE message** — true parallel execution.<% else %>Run **<< p.wave1_fetchers|dash >> fetchers in ONE `hyperresearch spawn --batch` call** — true parallel execution. Write each fetcher's prompt to `research/runs/<vault_tag>/spawn/fetcher-<n>.md`, list them in `research/runs/<vault_tag>/spawn/wave-1.json` as `[{"agent": "hyperresearch-fetcher", "prompt_file": "<path>"}, ...]`, then run `hyperresearch spawn --batch research/runs/<vault_tag>/spawn/wave-1.json --json`.<% endif %><% endif %> Each fetcher gets its own non-overlapping batch.
 
-**Subagent type:** `hyperresearch-fetcher`
+**<% if platform == "codex" %>Custom agent<% else %>Subagent type<% endif %>:** `hyperresearch-fetcher`
 
 **Spawn template (use the standard 3-piece contract):**
 ```
-<< h.spawn_key >>: hyperresearch-fetcher
+<% if platform == "codex" %>custom_agent: hyperresearch-fetcher   # spawn the custom agent defined in .codex/agents/hyperresearch-fetcher.toml<% else %><< h.spawn_key >>: hyperresearch-fetcher<% endif %>
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste contents of research/runs/<vault_tag>/query.md}}
@@ -156,7 +156,7 @@ prompt: |
 
 **CRITICAL: no token waste.** Each fetcher gets ONLY its batch. No fetcher searches for new URLs or duplicates another fetcher's work. If a fetcher finishes early, it's done.
 
-**CRITICAL: never emit bare text while waiting.** In `-p` mode, a text-only response triggers `end_turn`.
+<% if platform == "codex" %>**CRITICAL: do not end your turn while waiting.** Wait for every fetcher to finish; a message with no tool call ends the run in `codex exec`.<% else %>**CRITICAL: never emit bare text while waiting.** In `-p` mode, a text-only response triggers `end_turn`.<% endif %>
 
 **Use wait time to think.** While subagents are working, write evolving thoughts to `research/runs/<vault_tag>/temp/orchestrator-notes.md`:
 - What patterns are emerging from sources?
@@ -165,11 +165,11 @@ prompt: |
 - How will atomic items map to sections?
 - What's the narrative arc?
 
-Append a few lines with `Edit` or `Write` every 30-60 seconds. Productive thinking time AND keeps the turn alive.
+<% if platform == "codex" %>Append a few lines with `apply_patch` between checks. Productive thinking time.<% else %>Append a few lines with `Edit` or `Write` every 30-60 seconds. Productive thinking time AND keeps the turn alive.<% endif %>
 
 **Vault count check** — once every << p.vault_check_interval_s >> seconds max:
 ```bash
-PYTHONIOENCODING=utf-8 $HPR note list --tag <vault_tag> --all --json | python -c "import sys,json; d=json.load(sys.stdin); print(f'Notes in vault: {len(d.get(\"data\",[]))}')"
+PYTHONIOENCODING=utf-8 {hpr_path} note list --tag <vault_tag> --all --json | python -c "import sys,json; d=json.load(sys.stdin); print(f'Notes in vault: {len(d.get(\"data\",[]))}')"
 ```
 
 The wave is done when the vault note count is ≥<< (p.wave_done_ratio * 100)|int >>% of total URLs queued.
@@ -180,7 +180,7 @@ The wave is done when the vault note count is ≥<< (p.wave_done_ratio * 100)|in
 
 After Wave 1 returns, run the coverage check before proceeding:
 
-1. **List fetched sources:** `$HPR note list --tag <vault_tag> --all --json` — count substantive (non-deprecated) notes.
+1. **List fetched sources:** `{hpr_path} note list --tag <vault_tag> --all --json` — count substantive (non-deprecated) notes.
 
 2. **Map sources → atomic items.** For each atomic item in the decomposition, identify which fetched sources serve it. Mark each item as:
    - **Well-covered** (4+ relevant sources)
@@ -226,10 +226,10 @@ After Wave 1 returns, run the coverage check before proceeding:
 Four commands that turn the corpus into a *ranked* corpus. Run them once, in order, after fetching completes:
 
 ```bash
-$HPR claims ingest --tag <vault_tag> -j          # claims JSONs -> queryable claims table
-$HPR sources backfill-doi --tag <vault_tag> -j   # catch DOIs the fetchers missed
-$HPR sources score --tag <vault_tag> -j          # citation counts + retraction check (cached APIs)
-$HPR graph rank -j                               # vault centrality + composite quality_score
+{hpr_path} claims ingest --tag <vault_tag> -j          # claims JSONs -> queryable claims table
+{hpr_path} sources backfill-doi --tag <vault_tag> -j   # catch DOIs the fetchers missed
+{hpr_path} sources score --tag <vault_tag> -j          # citation counts + retraction check (cached APIs)
+{hpr_path} graph rank -j                               # vault centrality + composite quality_score
 ```
 
 **If `sources score` reports RETRACTED sources:** flag them in `research/runs/<vault_tag>/temp/coverage-gaps.md` immediately — a retracted source must never anchor a locus or survive into drafting as unqualified evidence. The retraction floor also crushes its `quality_score`, so ranked curation (step 10) buries it automatically.
@@ -238,15 +238,21 @@ These commands are local/cached and cost seconds. Skipping them leaves step 10's
 
 ---
 
-## Step 2.8 — Drain the browser-lane escalation queue (conditional)
+## Step 2.8 — <% if platform == "codex" %>Record the browser-lane escalation queue (no draining on Codex)<% else %>Drain the browser-lane escalation queue (conditional)<% endif %>
 
 Blocked fetches (login walls, bot walls, captchas) were NOT lost — the fetch gate queued them:
 
 ```bash
-$HPR escalation list --status queued --tag <vault_tag> -j
+{hpr_path} escalation list --status queued --tag <vault_tag> -j
 ```
 
-<% if h.browser_lane %>**If queued items exist**, spawn EXACTLY ONE `hyperresearch-browser-fetcher` subagent to drain them (serial, one browser — never spawn two):
+<% if platform == "codex" %>**On Codex there is no browser-fetcher** — nothing can drive a real browser during the run. Do NOT block the pipeline on these items and do NOT try to fetch them some other way:
+
+1. Leave every item queued. Note the queued count (and the URLs) in `research/runs/<vault_tag>/temp/orchestrator-notes.md` and in your wave summary, then move on.
+2. At the very end of the run, your final message lists every still-queued escalation for this run (URL + reason) in ONE consolidated list, so the human can open them in a browser, complete any CAPTCHA / login / 2FA themselves, and re-run. Never attempt to solve those challenges.
+
+Queued items are exactly the pre-4.0 status quo (lost sources), never worse.
+<% else %><% if h.browser_lane %>**If queued items exist**, spawn EXACTLY ONE `hyperresearch-browser-fetcher` subagent to drain them (serial, one browser — never spawn two):
 
 ```
 << h.spawn_key >>: hyperresearch-browser-fetcher
@@ -264,7 +270,7 @@ prompt: |
 
   YOUR INPUTS:
   - vault_tag: <vault_tag>
-  - drain up to 10 items (claim via `$HPR escalation claim --tag <vault_tag>`)
+  - drain up to 10 items (claim via `{hpr_path} escalation claim --tag <vault_tag>`)
 
   RUN DIRECTIVES: append the FULL contents of research/runs/<vault_tag>/shims/research.md here, verbatim.
 ```
@@ -273,11 +279,11 @@ prompt: |
 
 1. **Consolidate into ONE message to the user** — never one interruption per URL:
    > "3 sources need you: [site A: solve the CAPTCHA], [site B: log in], [site C: approve 2FA]. Open them in Chrome, complete the challenges, then tell me 'done' (or 'skip')."
-2. In non-interactive (`-p`) runs where no user can answer: record `$HPR run block <vault_tag> --on human-challenges -j` and CONTINUE the pipeline with everything else — the queue drains on the next `hpr run resume`.
-3. After the user says done: `$HPR escalation retry <id>` each item, re-spawn the browser-fetcher once, then re-run step 2.7's ranking commands so the new sources are scored.
+2. In non-interactive (`-p`) runs where no user can answer: record `{hpr_path} run block <vault_tag> --on human-challenges -j` and CONTINUE the pipeline with everything else — the queue drains on the next `hpr run resume`.
+3. After the user says done: `{hpr_path} escalation retry <id>` each item, re-spawn the browser-fetcher once, then re-run step 2.7's ranking commands so the new sources are scored.
 
 **If the browser lane is unavailable**, the queue simply accumulates — report the queued count in your wave summary and move on. Abandoned/queued items are exactly the pre-4.0 status quo (lost sources), never worse.<% else %>**This harness has no browser lane.** Nothing drains the queue here: report the queued count in your wave summary and move on. Queued items are exactly the pre-4.0 status quo (lost sources), never worse, and a later run from a harness with a browser lane can still drain them.<% endif %>
-
+<% endif %>
 ---
 
 ## Source count targets
@@ -296,7 +302,7 @@ Substantive (non-deprecated) note counts. The `full` row reflects the installed 
 When a single long source (><< p.source_analyst_word_trigger >> words) is load-bearing, delegate end-to-end analysis to `hyperresearch-source-analyst` (full-source deep read):
 
 Trigger conditions (ALL three must hold):
-1. **Length:** source's `word_count` (visible on `$HPR note show <id> -j`) exceeds ~<< p.source_analyst_word_trigger >> words
+1. **Length:** source's `word_count` (visible on `{hpr_path} note show <id> -j`) exceeds ~<< p.source_analyst_word_trigger >> words
 2. **Relevance:** source is relevant to the research_query
 3. **No existing analysis:** no `type: source-analysis` note already exists for this source
 
@@ -304,7 +310,7 @@ Trigger conditions (ALL three must hold):
 
 Spawn template:
 ```
-<< h.spawn_key >>: hyperresearch-source-analyst
+<% if platform == "codex" %>custom_agent: hyperresearch-source-analyst   # spawn the custom agent defined in .codex/agents/hyperresearch-source-analyst.toml<% else %><< h.spawn_key >>: hyperresearch-source-analyst<% endif %>
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste research/runs/<vault_tag>/query.md body}}
@@ -340,5 +346,5 @@ If you fall short after two waves, proceed anyway but ensure `coverage-gaps.md` 
 
 Return to the entry skill (`hyperresearch`). Tier-based routing:
 
-- **light tier:** Skip directly to step 10 — invoke `<< h.load_skill("hyperresearch-10-triple-draft") >>` (light tier writes a single draft, not the ensemble)
-- **full tier:** Invoke `<< h.load_skill("hyperresearch-3-contradiction-graph") >>`
+- **light tier:** Skip directly to step 10 — invoke `<% if platform == "codex" %>cat .hyperresearch/codex/steps/hyperresearch-10-triple-draft.md<% else %><< h.load_skill("hyperresearch-10-triple-draft") >><% endif %>` (light tier writes a single draft, not the ensemble)
+- **full tier:** Invoke `<% if platform == "codex" %>cat .hyperresearch/codex/steps/hyperresearch-3-contradiction-graph.md<% else %><< h.load_skill("hyperresearch-3-contradiction-graph") >><% endif %>`

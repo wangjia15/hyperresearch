@@ -134,6 +134,7 @@ def config_agent_docs(
     """Refresh each harness's context file (CLAUDE.md / AGENTS.md) with the latest blurb."""
     from hyperresearch.cli._harness import resolve_cli_harnesses
     from hyperresearch.core.agent_docs import inject_agent_docs
+    from hyperresearch.core.hooks import installed_platforms
     from hyperresearch.core.vault import Vault
 
     vault = Vault.discover()
@@ -144,6 +145,8 @@ def config_agent_docs(
         json_output=json_output,
     )
     modified = inject_agent_docs(vault.root, harnesses=targets)
+    if "codex" in installed_platforms(vault.root):
+        modified += inject_agent_docs(vault.root, platform="codex")
 
     if json_output:
         output(

@@ -17,6 +17,8 @@ Context exposed to templates:
                  skill-load and spawn mechanics, install paths. Defaults to
                  Claude Code, whose rendering is byte-identical to the
                  pre-harness prompts.
+    platform   — the agent runtime being installed for: "claude" (Claude
+                 Code) or "codex" (OpenAI Codex CLI). See core/platforms.py.
 
 Filters:
     dash    — join a (low, high) range with an en dash (U+2013)
@@ -30,6 +32,7 @@ a prompt with a hole in it.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from jinja2 import Environment, StrictUndefined
 
@@ -70,22 +73,31 @@ def build_render_context(
     config_path: Path | None = None,
     primary: str = "full",
     harness: str | Harness = DEFAULT_HARNESS_ID,
-) -> dict[str, object]:
-    """Resolve every profile plus the target harness.
+    platform: str = "claude",
+) -> dict[str, Any]:
+    """Resolve every profile plus the target harness and platform.
 
-    Exposes each profile by name, the primary one as `p`, and the harness as
-    `h`. `p`/`h` are assigned last: a user-defined overlay profile with one of
-    those names cannot shadow them.
+    Exposes each profile by name, the primary one as `p`, the harness as
+    `h`, and the agent runtime as `platform`. `p`/`h`/`platform` are
+    assigned last: a user-defined overlay profile with one of those names
+    cannot shadow them.
     """
+    from hyperresearch.core.platforms import check_platform
+
     profiles = {name: resolve_profile(name, config_path) for name in list_profiles(config_path)}
     if primary not in profiles:
         # resolve_profile raises a helpful error for unknown names
         profiles[primary] = resolve_profile(primary, config_path)
     target = harness if isinstance(harness, Harness) else get_harness(harness)
-    return {**profiles, "p": profiles[primary], "h": target}
+    return {
+        **profiles,
+        "p": profiles[primary],
+        "h": target,
+        "platform": check_platform(platform),
+    }
 
 
-def render_prompt(text: str, context: dict[str, object]) -> str:
+def render_prompt(text: str, context: dict[str, Any]) -> str:
     """Render one prompt template with the given profile/harness context."""
     return prompt_env().from_string(text).render(**context)
 

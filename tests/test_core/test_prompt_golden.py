@@ -119,6 +119,12 @@ Deliberate deviations already folded into the goldens (2026-07-19):
     escalation-drain fallback now says "If the browser lane is unavailable"
     instead of naming the Claude-in-Chrome extension, because the same
     sentence must be true on OMP.
+  - CLI path in skills (2026-09-22, #133): the skills spelled the CLI
+    `$HPR`, which nothing defined, so `$HPR run finish` expanded to
+    `run finish` and failed in the shell. They now carry `{hpr_path}`,
+    the agent prompts' placeholder, which install resolves to the CLI's
+    absolute path. These goldens pin the pre-install render, so they hold
+    the placeholder.
 """
 
 from __future__ import annotations

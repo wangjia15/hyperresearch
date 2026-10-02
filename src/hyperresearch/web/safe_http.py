@@ -57,7 +57,8 @@ class CertVerificationError(SafeHTTPError):
     """TLS certificate verification failed and verification is required.
 
     Raised distinctly so callers can surface the refusal (and its
-    ``pdf_verify_tls = false`` opt-out) instead of treating it like any
+    ``pdf_verify_tls = false`` or ``browser_verify_tls = false`` opt-out,
+    depending on the lane) instead of treating it like any
     other failed fetch — in particular, a cert-refused URL must never be
     retried through a lane that ignores TLS errors.
     """
@@ -90,12 +91,19 @@ _CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
 # 6to4 (RFC 3056): a 2002:AABB:CCDD::/48 prefix embeds the IPv4 address
 # A.B.C.D, so 2002:7f00:1:: is loopback wearing an IPv6 coat. The transport
 # is deprecated and rarely routed, but the ipaddress module does not flag it
-# and the embedded address is what matters. IPv4-mapped (::ffff:a.b.c.d) is
-# already caught because ipaddress unwraps it for the is_* properties.
+# and the embedded address is what matters.
 _6TO4_NET = ipaddress.ip_network("2002::/16")
 
 
 def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    # Classify IPv4-mapped IPv6 (::ffff:a.b.c.d) by its embedded IPv4, which
+    # is where the OS sends the connection. The ipaddress is_* properties do
+    # not agree on mapped addresses across interpreters: on 3.11 and 3.13 a
+    # mapped CGNAT address passes every property, and the CGNAT check below
+    # only looks at version-4 addresses, so it was allowed; on 3.12 every
+    # mapped address reports is_reserved, so even a mapped public address
+    # was refused. Unmapping first gives the same answer everywhere.
+    ip = getattr(ip, "ipv4_mapped", None) or ip
     if ip.version == 6 and ip in _6TO4_NET:
         packed = int(ip) >> 80 & 0xFFFFFFFF
         return _is_blocked_ip(ipaddress.IPv4Address(packed))
@@ -146,12 +154,22 @@ def _parse_allowlist(
         if not entry:
             continue
         try:
-            networks.append(ipaddress.ip_network(entry, strict=False))
+            # Brackets are URL notation for an IPv6 literal ("[::1]"); the
+            # network types reject them, so parse the address inside.
+            networks.append(ipaddress.ip_network(entry.strip("[]"), strict=False))
         except ValueError:
             if "/" in entry:  # meant as a CIDR, but malformed
                 raise SafeHTTPError(
                     f"invalid allow_private_hosts entry {entry!r}: not a valid CIDR"
                 ) from None
+            if ":" in entry:
+                # host:port. URL hostnames never carry the port, so the entry
+                # would become a hostname that can never match: a silent dead
+                # entry that looks like an SSRF refusal of the user's mirror.
+                raise SafeHTTPError(
+                    f"invalid allow_private_hosts entry {entry!r}: entries are "
+                    "hostnames or CIDRs; drop the port"
+                )
             hostnames.add(entry.lower())
     return frozenset(hostnames), networks
 

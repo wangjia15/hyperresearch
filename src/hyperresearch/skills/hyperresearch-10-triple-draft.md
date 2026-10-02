@@ -8,7 +8,7 @@ description: >
   This step ENDS when all 3 drafts are written and validated. Step 11
   (synthesizer) handles the synthesis-write that produces the final report.
   For light tier: writes a single draft directly to final_report.md and
-  skips ahead to step 15 (polish). Invoked via Skill tool.
+  skips ahead to step 15 (polish). Invoked via <% if platform == "codex" %>step-file read<% else %>Skill tool<% endif %>.
 ---
 
 # Step 10 — Triple-draft ensemble (curated lists, parallel writers)
@@ -30,7 +30,7 @@ Read these inputs:
 - `research/runs/<vault_tag>/comparisons.md` (full tier) — cross-locus tensions
 - `research/runs/<vault_tag>/temp/source-tensions.json` (full tier) — expert disagreements
 - `research/runs/<vault_tag>/temp/coverage-gaps.md` (if exists) — items with weak source coverage
-- Survey vault: `$HPR note list --tag <vault_tag> --all -j` for the evidence landscape
+- Survey vault: `{hpr_path} note list --tag <vault_tag> --all -j` for the evidence landscape
 - Modality calibration (from the scaffold's `modality` field):
   - **collect** — enumerative coverage, per-entity sections with named fields
   - **synthesize** — defended thesis with evidence chains, interpretive density
@@ -59,7 +59,7 @@ If `pipeline_tier == "light"`: SKIP step 10.1 — 10.3 below and follow this sec
 
 **Light tier writes a single draft directly to `research/notes/final_report_<vault_tag>.md`.** No subagents, no triple-draft ensemble, no synthesizer.
 
-1. **Read the vault directly.** Light tier has no `evidence-digest.md` (step 9 was skipped). Survey the vault: `$HPR note list --tag <vault_tag> --all -j` and pick the << p.single_draft_reads|dash >> most relevant non-deprecated notes. Read each one (`$HPR note show <id1> <id2> ... -j`) before writing.
+1. **Read the vault directly.** Light tier has no `evidence-digest.md` (step 9 was skipped). Survey the vault: `{hpr_path} note list --tag <vault_tag> --all -j` and pick the << p.single_draft_reads|dash >> most relevant non-deprecated notes. Read each one (`{hpr_path} note show <id1> <id2> ... -j`) before writing.
 
 2. **Honor the structural contract.**
    - Use the literal H2 headings from `required_section_headings` in `research/runs/<vault_tag>/prompt-decomposition.json`, in order.
@@ -73,7 +73,7 @@ If `pipeline_tier == "light"`: SKIP step 10.1 — 10.3 below and follow this sec
 
 4. **Hygiene.** No YAML frontmatter on the final report. No pipeline vocabulary in prose ("hyperresearch", "evidence digest", "comparisons.md", "committed reading", etc.). When `citation_style == "wikilink"`, `[[<source-note-id>]]` markers ARE the citation system and must be preserved — only strip wikilinks that point at workspace artifacts (interim-*, scaffold, comparisons). Step 15 (polish) is a backstop, not a license to leak.
 
-5. **Exit and route.** Once `research/notes/final_report_<vault_tag>.md` is written, return to the entry skill and invoke `<< h.load_skill("hyperresearch-15-polish") >>`. Light tier skips steps 11–14 entirely.
+5. **Exit and route.** Once `research/notes/final_report_<vault_tag>.md` is written, return to the entry skill and invoke `<% if platform == "codex" %>cat .hyperresearch/codex/steps/hyperresearch-15-polish.md<% else %><< h.load_skill("hyperresearch-15-polish") >><% endif %>`. Light tier skips steps 11–14 entirely.
 
 ---
 
@@ -101,13 +101,13 @@ Write the 3 angle assignments to `research/runs/<vault_tag>/temp/draft-angles.md
 
 1. **List all substantive vault notes:**
    ```bash
-   $HPR note list --tag <vault_tag> --all --json
+   {hpr_path} note list --tag <vault_tag> --all --json
    ```
    Filter to non-deprecated notes. You should have 50-100 candidates.
 
    **Rank the pool before picking.** For each atomic item, run a quality-ranked search to surface the best-evidence sources first:
    ```bash
-   $HPR search "<atomic item keywords>" --tag <vault_tag> --ranked -j
+   {hpr_path} search "<atomic item keywords>" --tag <vault_tag> --ranked -j
    ```
    `--ranked` folds the composite `quality_score` (tier + utility + citation authority + vault centrality, retractions floored) into relevance. Prefer high-quality sources when two candidates cover the same ground; a note with `quality_score` near the retraction floor should not appear in any must_read list unless the draft explicitly discusses its retraction.
 
@@ -141,11 +141,11 @@ Write the 3 angle assignments to `research/runs/<vault_tag>/temp/draft-angles.md
 
 ## Step 10.3 — Spawn << p.draft_count >> draft sub-orchestrators in parallel
 
-<% if h.has_subagents %>**Spawn << p.draft_count >> `hyperresearch-draft-orchestrator` subagents in ONE message.**<% else %>**Run << p.draft_count >> `hyperresearch-draft-orchestrator` agents in ONE `hyperresearch spawn --batch` call.**<% endif %> This is true parallel execution. Each gets a different `draft_id`, `analytical_angle`, and (CRUCIALLY) a different `must_read_note_ids` array.
+<% if platform == "codex" %>**Spawn << p.draft_count >> `hyperresearch-draft-orchestrator` subagents (custom agent `.codex/agents/hyperresearch-draft-orchestrator.toml`) — spawn all << p.draft_count >> now, in parallel, and wait for all of them.**<% else %><% if h.has_subagents %>**Spawn << p.draft_count >> `hyperresearch-draft-orchestrator` subagents in ONE message.**<% else %>**Run << p.draft_count >> `hyperresearch-draft-orchestrator` agents in ONE `hyperresearch spawn --batch` call.**<% endif %><% endif %> This is true parallel execution. Each gets a different `draft_id`, `analytical_angle`, and (CRUCIALLY) a different `must_read_note_ids` array.
 
 **Spawn template:**
 ```
-<< h.spawn_key >>: hyperresearch-draft-orchestrator
+<% if platform == "codex" %>custom_agent: hyperresearch-draft-orchestrator   # spawn the custom agent defined in .codex/agents/hyperresearch-draft-orchestrator.toml<% else %><< h.spawn_key >>: hyperresearch-draft-orchestrator<% endif %>
 prompt: |
   RESEARCH QUERY (verbatim, gospel):
   > {{paste research/runs/<vault_tag>/query.md body}}
@@ -180,7 +180,7 @@ prompt: |
   Write your draft from your assigned angle, citing your curated sources.
 ```
 
-**CRITICAL: never emit bare text while the 3 sub-orchestrators are running.** They will take 5-15 minutes each. Use this time to think — append notes to `research/runs/<vault_tag>/temp/orchestrator-notes.md` about the synthesis you'll plan in step 11: what's the strongest thesis emerging across angles? Which atomic items will be contentious? What argumentative beats must the final draft commit to? One vault count check per minute max. Write your thoughts, don't just poll.
+**CRITICAL: <% if platform == "codex" %>do not end your turn while the 3 sub-orchestrators are running — wait for all of them.**<% else %>never emit bare text while the 3 sub-orchestrators are running.**<% endif %> They will take 5-15 minutes each. Use this time to think — append notes to `research/runs/<vault_tag>/temp/orchestrator-notes.md` about the synthesis you'll plan in step 11: what's the strongest thesis emerging across angles? Which atomic items will be contentious? What argumentative beats must the final draft commit to? One vault count check per minute max. Write your thoughts, don't just poll.
 
 ---
 
@@ -222,5 +222,5 @@ When all 3 sub-orchestrators return:
 
 Return to the entry skill (`hyperresearch`). Tier-based routing:
 
-- **light tier:** You already wrote `research/notes/final_report_<vault_tag>.md` directly. Skip steps 11-14 (no synthesis, no critics, no patcher) and invoke `<< h.load_skill("hyperresearch-15-polish") >>`.
-- **full tier:** Invoke `<< h.load_skill("hyperresearch-11-synthesize") >>`.
+- **light tier:** You already wrote `research/notes/final_report_<vault_tag>.md` directly. Skip steps 11-14 (no synthesis, no critics, no patcher) and invoke `<% if platform == "codex" %>cat .hyperresearch/codex/steps/hyperresearch-15-polish.md<% else %><< h.load_skill("hyperresearch-15-polish") >><% endif %>`.
+- **full tier:** Invoke `<% if platform == "codex" %>cat .hyperresearch/codex/steps/hyperresearch-11-synthesize.md<% else %><< h.load_skill("hyperresearch-11-synthesize") >><% endif %>`.

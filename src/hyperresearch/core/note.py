@@ -9,10 +9,9 @@ from pathlib import Path
 
 from hyperresearch.core.frontmatter import parse_frontmatter, render_note
 from hyperresearch.core.patterns import (
-    CODE_BLOCK_RE,
-    INLINE_CODE_RE,
     WIKI_LINK_RE,
     is_valid_wiki_link_target,
+    strip_code,
 )
 from hyperresearch.models.note import Note, NoteMeta, slugify
 
@@ -46,8 +45,7 @@ def read_note(file_path: Path, vault_root: Path) -> Note:
         meta.id = slugify(file_path.stem)
 
     # Extract outgoing wiki links, filtering citation footnotes and URLs
-    cleaned = CODE_BLOCK_RE.sub("", body)
-    cleaned = INLINE_CODE_RE.sub("", cleaned)
+    cleaned = strip_code(body)
     raw_links = (m.group(1).strip().rstrip("\\") for m in WIKI_LINK_RE.finditer(cleaned))
     outgoing = list(dict.fromkeys(
         ref for ref in raw_links if is_valid_wiki_link_target(ref)
@@ -108,7 +106,15 @@ def write_note(
         content_type: Artifact kind — paper|docs|article|blog|forum|dataset|policy|code|book|transcript|review|unknown.
         extra_frontmatter: Additional fields to set on NoteMeta (e.g. source_domain, fetched_at).
     """
-    nid = note_id or slugify(title)
+    # The id must be a fixed point of the slugifier. NoteMeta.ensure_slug
+    # already slugifies the FRONTMATTER id, so an unslugified note_id here
+    # made the filename diverge from the note's own frontmatter: callers that
+    # pass broken-link text verbatim (cli/graph.py stub, cli/repair.py) wrote
+    # literal filenames like `! -f "$KERNELDESTINATION".md`, and a `../`
+    # shaped ref resolved to a path outside the vault. slugify strips path
+    # separators and shell metacharacters and never returns an empty string,
+    # so the filename below is always safe.
+    nid = slugify(note_id) if note_id else slugify(title)
     kwargs: dict = dict(
         title=title,
         id=nid,
@@ -149,8 +155,7 @@ def write_note(
 
 def strip_markdown(text: str) -> str:
     """Strip markdown formatting to plain text for FTS indexing."""
-    text = CODE_BLOCK_RE.sub("", text)
-    text = INLINE_CODE_RE.sub("", text)
+    text = strip_code(text)
     text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
     text = re.sub(r"\*{1,3}([^*]+)\*{1,3}", r"\1", text)
     text = re.sub(r"_{1,3}([^_]+)_{1,3}", r"\1", text)

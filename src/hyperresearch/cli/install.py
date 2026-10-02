@@ -1,4 +1,9 @@
-"""Install command — one-step setup: vault init + agent hooks + docs injection."""
+"""Install command — one-step setup: vault init + agent hooks + docs injection.
+
+`--target` picks the agent runtime(s): claude (Claude Code, the default),
+codex (OpenAI Codex CLI), or all. See core/platforms.py for where each
+platform's files land.
+"""
 
 from __future__ import annotations
 
@@ -36,6 +41,12 @@ def install(
         "-H",
         help="Harnesses to install into: claude, omp, pi, or all (repeatable, comma-separated ok). Default: the vault's [harness] targets, else autodetected from the project and user config dirs. An explicit choice is persisted for later installs.",
     ),
+    target: str = typer.Option(
+        "claude",
+        "--target",
+        "-t",
+        help="Agent runtime to install for: claude (Claude Code), codex (OpenAI Codex CLI), or all. Applies to normal, --global, and --steps-only installs. The claude target honors --harness; codex is its own install.",
+    ),
 ) -> None:
     """Install hyperresearch: init vault + inject the context file + install harness skills/agents."""
     import sys
@@ -47,12 +58,27 @@ def install(
         resolve_cli_harnesses,
     )
     from hyperresearch.core.hooks import (
+        _install_codex_stop_hook,
+        _install_hyperresearch_step_skills,
+        _set_render_state,
         install_global_hooks,
         install_hooks,
         install_step_skills,
     )
+    from hyperresearch.core.platforms import CODEX, PlatformError, resolve_targets
     from hyperresearch.core.profiles import ProfileError
     from hyperresearch.core.vault import Vault, VaultError
+
+    # Validate the target before anything is written.
+    try:
+        platforms = resolve_targets(target)
+    except PlatformError:
+        msg = f"Unknown target '{target}'. Available: claude, codex, all"
+        if json_output:
+            output(error(msg, "UNKNOWN_TARGET"), json_mode=True)
+        else:
+            console.print(f"[red]Error:[/] {msg}")
+        raise typer.Exit(1)
 
     # No explicit --profile → use the gear persisted by `hpr profile use`
     # in the target's config (falling back to "full").
@@ -79,39 +105,50 @@ def install(
             raise typer.Exit(1)
 
     # Steps-only path: lazy install of the 18 step skills into the harness's
-    # project skills dir. Called by the entry skill's bootstrap on the first
-    # run in a project (after a global install). Cheap no-op on subsequent
-    # invocations.
+    # project skills dir (Codex: step files in .hyperresearch/codex/steps/).
+    # Called by the entry skill's bootstrap on the first run in a project
+    # (after a global install). Cheap no-op on subsequent invocations.
     if steps_only:
-        target = Path(path).resolve()
-        steps_config = target / ".hyperresearch" / "config.toml"
+        target_dir = Path(path).resolve()
+        steps_config = target_dir / ".hyperresearch" / "config.toml"
         steps_config_path = steps_config if steps_config.exists() else None
         steps_profile = _default_profile(steps_config_path)
         _check_profile(steps_profile, steps_config_path)
-        targets = resolve_cli_harnesses(
-            harness, root=target, config_path=steps_config_path, json_output=json_output
-        )
-        actions = install_step_skills(target, profile=steps_profile, harnesses=targets)
-        dirs = ", ".join(f"{target}/{h.skills_rel}" for h in targets)
-        if json_output:
-            output(
-                success(
-                    {
-                        "steps_installed": actions,
-                        "target": str(target),
-                        "harnesses": harness_ids(targets),
-                    },
-                    vault=None,
-                ),
-                json_mode=True,
+        from hyperresearch.core.agent_docs import _resolve_executable
+
+        hpr_path = _resolve_executable()
+        results: list[tuple[str, str | None]] = []
+        if "claude" in platforms:
+            harness_targets = resolve_cli_harnesses(
+                harness, root=target_dir, config_path=steps_config_path, json_output=json_output
             )
+            actions = install_step_skills(
+                target_dir, hpr_path=hpr_path, profile=steps_profile, harnesses=harness_targets
+            )
+            results.append(("claude", " | ".join(actions) if actions else None))
+        if CODEX in platforms:
+            _set_render_state(steps_profile, steps_config_path, platform=CODEX)
+            result = _install_hyperresearch_step_skills(target_dir, hpr_path)
+            # The Stop gate is what keeps a Codex session on the pipeline;
+            # a project bootstrapped from a global install needs it too.
+            hook = _install_codex_stop_hook(target_dir, hpr_path)
+            results.append((CODEX, " | ".join(r for r in (result, hook) if r) or None))
+        if json_output:
+            done = [r for _, r in results if r]
+            data = {
+                "steps_installed": " | ".join(done) if done else None,
+                "target": str(target_dir),
+                "targets": list(platforms),
+                "harnesses": harness_ids(harness_targets) if "claude" in platforms else [],
+            }
+            output(success(data, vault=None), json_mode=True)
             return
-        if actions:
-            console.print(f"[green]Step skills installed:[/] {dirs}")
-            for action in actions:
-                console.print(f"  {action}")
-        else:
-            console.print(f"[dim]Step skills already installed at {dirs}[/]")
+        for label, result in results:
+            if result:
+                console.print(f"[green]Step skills installed ({label}):[/]")
+                console.print(f"  {result}")
+            else:
+                console.print(f"[dim]Step skills already installed ({label})[/]")
         return
 
     # Global install path: only the user-level entry skill + agents. No vault,
@@ -126,10 +163,17 @@ def install(
         home = Path.home()
         global_profile = profile if profile is not None else "full"
         _check_profile(global_profile, None)
-        targets = resolve_cli_harnesses(harness, json_output=json_output)
-        hook_actions = install_global_hooks(
-            home, hpr_path=hpr_path, profile=global_profile, harnesses=targets
-        )
+        per_target: dict[str, list[str]] = {}
+        if "claude" in platforms:
+            harness_targets = resolve_cli_harnesses(harness, json_output=json_output)
+            per_target["claude"] = install_global_hooks(
+                home, hpr_path=hpr_path, profile=global_profile, harnesses=harness_targets
+            )
+        if CODEX in platforms:
+            per_target[CODEX] = install_global_hooks(
+                home, hpr_path=hpr_path, profile=global_profile, platform=CODEX
+            )
+        hook_actions = [a for actions in per_target.values() for a in actions]
 
         if json_output:
             output(
@@ -138,7 +182,8 @@ def install(
                         "global": True,
                         "home": str(home),
                         "hooks_installed": hook_actions,
-                        "harnesses": harness_ids(targets),
+                        "harnesses": harness_ids(harness_targets) if "claude" in platforms else [],
+                        "targets": list(platforms),
                     },
                     vault=None,
                 ),
@@ -146,29 +191,49 @@ def install(
             )
             return
 
-        roots = ", ".join(str(h.global_root(home)) for h in targets)
-        console.print(f"[green]Global install ({harness_labels(targets)}):[/] {roots}")
-        if hook_actions:
-            for action in hook_actions:
+        if "claude" in platforms:
+            roots = ", ".join(str(h.global_root(home)) for h in harness_targets)
+            console.print(f"[green]Global install ({harness_labels(harness_targets)}):[/] {roots}")
+            for action in per_target.get("claude", []):
                 console.print(f"  {action}")
-        else:
-            console.print("[dim]All skills and agents already installed.[/]")
-        commands = ", ".join(sorted({h.invoke_command for h in targets}))
-        console.print(
-            f"\n[bold]Ready.[/] {commands} is now available in every session."
-        )
-        console.print(
-            "[dim]On the first run in a project, the vault, research/ folder, "
-            "and the 18 step skills are created in that project.[/]"
-        )
+            if not per_target.get("claude"):
+                console.print("[dim]All skills and agents already installed.[/]")
+            commands = ", ".join(sorted({h.invoke_command for h in harness_targets}))
+            console.print(
+                f"\n[bold]Ready.[/] {commands} is now available in every session."
+            )
+            console.print(
+                "[dim]On the first run in a project, the vault, research/ folder, "
+                "and the 18 step skills are created in that project.[/]"
+            )
+        if CODEX in platforms:
+            console.print(
+                f"[green]Global install (Codex):[/] {home}/.agents/skills/hyperresearch/ "
+                f"+ {home}/.codex/agents/"
+            )
+            for action in per_target.get(CODEX, []):
+                console.print(f"  {action}")
+            if not per_target.get(CODEX):
+                console.print("[dim]All skills and agents already installed.[/]")
+            console.print(
+                "\n[bold]Ready.[/] $hyperresearch is now available in every Codex session."
+            )
+            console.print(
+                "[dim]On first $hyperresearch run in a project, the vault, research/ folder, "
+                "step files (.hyperresearch/codex/steps/) and the Stop hook "
+                "(.codex/hooks.json) are created in that project. ~/.codex/config.toml is "
+                "never modified.[/]"
+            )
+            _print_codex_exec_hint()
         return
 
     root = Path(path).resolve()
 
     # First-time install in an interactive terminal → run the setup TUI instead
+    # (The setup TUI configures a Claude Code install; other targets skip it.)
     is_new = not (root / ".hyperresearch").exists()
     is_interactive = not json_output and sys.stdin.isatty()
-    if is_new and is_interactive:
+    if is_new and is_interactive and platforms == ["claude"]:
         from hyperresearch.cli.setup import setup
 
         setup(path=path, json_output=False, harness=harness)
@@ -176,12 +241,17 @@ def install(
 
     # Step 1: Resolve the harnesses first — the vault's context file depends
     # on them, so a `--harness omp` install must not leave a stray CLAUDE.md.
+    # A Codex-only install skips the harness path entirely.
     from hyperresearch.core.agent_docs import _resolve_executable, inject_agent_docs
 
     project_config = root / ".hyperresearch" / "config.toml"
     project_config_path = project_config if project_config.exists() else None
-    targets = resolve_cli_harnesses(
-        harness, root=root, config_path=project_config_path, json_output=json_output
+    harness_targets = (
+        resolve_cli_harnesses(
+            harness, root=root, config_path=project_config_path, json_output=json_output
+        )
+        if "claude" in platforms
+        else ()
     )
 
     # Step 2: Init vault (skip if already exists)
@@ -190,7 +260,9 @@ def install(
         vault_action = "existing"
     except VaultError:
         try:
-            vault = Vault.init(root, name=name, harnesses=targets)
+            vault = Vault.init(
+                root, name=name, harnesses=harness_targets, platforms=tuple(platforms)
+            )
             vault_action = "created"
         except VaultError as e:
             if json_output:
@@ -204,17 +276,26 @@ def install(
     persist_harness_targets(vault.config_path, harness)
     hpr_path = _resolve_executable()
 
-    # Step 4: Always re-inject each harness's context file (blurb + CLI path)
-    doc_actions = inject_agent_docs(root, harnesses=targets)
+    # Validate the gear before any target's files are written.
+    project_profile = _default_profile(project_config_path)
+    _check_profile(project_profile, project_config_path)
 
-    # Step 5: Install each harness's skills + subagents + reminder (rendered
-    # from the gear profile — explicit --profile, else the gear in config)
-    profile_config_path = vault.config_path if vault.config_path.exists() else None
-    project_profile = _default_profile(profile_config_path)
-    _check_profile(project_profile, profile_config_path)
-    hook_actions = install_hooks(
-        root, hpr_path=hpr_path, profile=project_profile, harnesses=targets
-    )
+    doc_actions: list[str] = []
+    hook_actions: list[str] = []
+    if harness_targets:
+        # Step 4: Always re-inject each harness's context file (blurb + CLI path)
+        doc_actions += inject_agent_docs(root, harnesses=harness_targets)
+
+        # Step 5: Install each harness's skills + subagents + reminder (rendered
+        # from the gear profile — explicit --profile, else the gear in config)
+        hook_actions += install_hooks(
+            root, hpr_path=hpr_path, profile=project_profile, harnesses=harness_targets
+        )
+    if CODEX in platforms:
+        doc_actions += inject_agent_docs(root, platform=CODEX)
+        hook_actions += install_hooks(
+            root, hpr_path=hpr_path, profile=project_profile, platform=CODEX
+        )
 
     # Step 6: Auto-configure crawl4ai if installed
     crawl4ai_status = _setup_crawl4ai(vault)
@@ -223,10 +304,11 @@ def install(
     data = {
         "vault_path": str(vault.root),
         "vault": vault_action,
-        "harnesses": harness_ids(targets),
+        "harnesses": harness_ids(harness_targets),
         "agent_docs": doc_actions,
         "hooks_installed": hook_actions,
         "crawl4ai": crawl4ai_status,
+        "targets": list(platforms),
     }
 
     if json_output:
@@ -237,7 +319,8 @@ def install(
         else:
             console.print(f"[dim]Vault exists:[/] {vault.root}")
 
-        console.print(f"[green]Harnesses:[/] {harness_labels(targets)}")
+        if harness_targets:
+            console.print(f"[green]Harnesses:[/] {harness_labels(harness_targets)}")
 
         if doc_actions:
             console.print("[green]Agent docs:[/]")
@@ -261,8 +344,30 @@ def install(
                 "For local headless browsing: pip install hyperresearch[crawl4ai]"
             )
 
-        console.print("\n[bold]Ready.[/] Agents will now check the research base before web searches.")
+        if "claude" in platforms:
+            console.print("\n[bold]Ready.[/] Agents will now check the research base before web searches.")
+        if CODEX in platforms:
+            console.print(
+                "\n[bold]Ready (Codex).[/] Start a research run with [bold]$hyperresearch <query>[/]."
+            )
+            _print_codex_exec_hint()
         console.print("[dim]Tip: Run 'hyperresearch setup' for interactive configuration (profile, stealth, etc.)[/]")
+
+
+def _print_codex_exec_hint() -> None:
+    """Codex sandboxes default to read-only, no network — research needs both.
+
+    Codex also runs project hooks (the stop gate in .codex/hooks.json) only
+    once the hooks are trusted.
+    """
+    console.print(
+        "[dim]Research needs network + workspace writes. Non-interactive:[/]\n"
+        '  codex exec --sandbox workspace-write -c sandbox_workspace_write.network_access=true '
+        '"$hyperresearch <query>"\n'
+        "[dim]The Stop hook (.codex/hooks.json) runs only once Codex trusts this project's "
+        "hooks — approve it when prompted, or add --dangerously-bypass-hook-trust to "
+        "codex exec in automation you control.[/]"
+    )
 
 
 def _setup_crawl4ai(vault) -> str:

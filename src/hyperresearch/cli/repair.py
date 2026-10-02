@@ -75,8 +75,11 @@ def repair(
                     summary=stub_summary(target),
                 )
                 stubs_created += 1
-            except Exception:
-                pass
+            except Exception as exc:
+                # A visible skip, not a silent one: a bare pass here hides
+                # exactly the malformed-target failures this loop can hit.
+                if not json_output:
+                    console.print(f"  [yellow]stub skipped[/] {target!r}: {exc}")
         if stubs_created:
             plan = compute_sync_plan(vault)
             execute_sync(vault, plan)
@@ -245,6 +248,8 @@ def repair(
             console.print("[bold]6/6 Updating agent docs...[/]")
         from hyperresearch.cli._harness import resolve_cli_harnesses
         from hyperresearch.core.agent_docs import inject_agent_docs
+        from hyperresearch.core.hooks import installed_platforms
+
         targets = resolve_cli_harnesses(
             harness,
             root=vault.root,
@@ -252,6 +257,8 @@ def repair(
             json_output=json_output,
         )
         modified = inject_agent_docs(vault.root, harnesses=targets)
+        if "codex" in installed_platforms(vault.root):
+            modified += inject_agent_docs(vault.root, platform="codex")
         report["harnesses"] = [h.id for h in targets]
         report["agent_docs"] = modified
         if not json_output:

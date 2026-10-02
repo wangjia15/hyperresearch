@@ -104,6 +104,15 @@ class TestCiteCheckExtraction:
         assert len(strong) == 5      # 100% of number-bearing
         assert len(weak) == 5        # every 2nd weak pair
 
+    @pytest.mark.parametrize(("rate", "expected"), [(0.6, 6), (0.3, 3), (1.0, 10), (0.0, 0)])
+    def test_sampling_hits_the_configured_rate(self, rate, expected):
+        # round(1 / 0.6) is 2, so the every-k-th rule sampled 0.6 as 50%.
+        pairs = [
+            {"verdict": "needs-llm", "strong": False, "sentence": f"w{i}", "numbers": []}
+            for i in range(10)
+        ]
+        assert len(sample_needs_llm(pairs, sample_rate=rate)) == expected
+
     def test_citecheck_cli(self, cited_vault, monkeypatch):
         from typer.testing import CliRunner
 
@@ -124,6 +133,64 @@ class TestCiteCheckExtraction:
         assert data["summary"]["supported_mechanical"] == 1
         assert data["dangling"] == 1
         assert (cited_vault.run_dir("cc-run") / "cite-check-pairs.json").exists()
+
+
+class TestQuoteSpanExtraction:
+    """Regression tests for quote span pairing (no min-length in the regex)."""
+
+    def _extract_spans(self, text: str) -> list[str]:
+        from hyperresearch.cli.lint import _QUOTE_SPAN_RE, _report_body_only
+
+        body = _report_body_only(text)
+        return [m.group(1) for m in _QUOTE_SPAN_RE.finditer(body)]
+
+    def test_short_quotes_extracted_individually(self):
+        text = (
+            'Metrics include "TVL", "Low Security", "reasonable use", '
+            '"6x Exits", and "registered entity" in the analysis.'
+        )
+        assert self._extract_spans(text) == [
+            "TVL",
+            "Low Security",
+            "reasonable use",
+            "6x Exits",
+            "registered entity",
+        ]
+
+    def test_short_quote_before_long_quote_does_not_desync(self):
+        text = (
+            'The report discusses "Low Security" instruments.\n'
+            'The source states "this is a sufficiently long quoted passage from the source".'
+        )
+        spans = self._extract_spans(text)
+        assert spans == [
+            "Low Security",
+            "this is a sufficiently long quoted passage from the source",
+        ]
+        assert len(spans) == 2
+        giant = "Low Security" + text.split('"Low Security"', 1)[1].split('"', 1)[0]
+        assert giant not in spans[0]
+        assert " instruments" not in spans[0]
+
+    def test_curly_quotes_and_straight_quotes(self):
+        text = 'Curly “quoted phrase” and straight "another phrase" here.'
+        assert self._extract_spans(text) == ["quoted phrase", "another phrase"]
+
+    def test_adjacent_quoted_phrases(self):
+        text = 'Terms "TVL" "Low Security" appear back to back.'
+        assert self._extract_spans(text) == ["TVL", "Low Security"]
+
+    def test_punctuation_after_closing_quote(self):
+        text = 'The label "Low Security", is used throughout.'
+        assert self._extract_spans(text) == ["Low Security"]
+
+    def test_apostrophe_inside_quote(self):
+        text = 'As noted, "Python\'s async/await syntax enables concurrent I/O" today.'
+        assert self._extract_spans(text) == ["Python's async/await syntax enables concurrent I/O"]
+
+    def test_citation_markers_stripped_before_extraction(self):
+        text = 'Evidence shows "Low Security" risk [[rust-ownership]].'
+        assert self._extract_spans(text) == ["Low Security"]
 
 
 class TestVerificationLints:
@@ -157,6 +224,37 @@ class TestVerificationLints:
         payload = self._lint(seeded_vault, "quote-integrity", monkeypatch)
         issues = [i for i in payload["data"]["issues"] if i["rule"] == "quote-integrity"]
         assert issues == []
+
+    def test_quote_integrity_skips_short_quotes_without_false_positive(
+        self, seeded_vault, monkeypatch
+    ):
+        report = seeded_vault.root / "research" / "notes" / "final_report_q.md"
+        report.write_text(
+            'The analysis covers "TVL", "Low Security", "reasonable use", '
+            '"6x Exits", and "registered entity" throughout the report body. '
+            "Intervening prose that would be swallowed by a desynchronized matcher "
+            "when it crosses twenty characters of unquoted text in the document.",
+            encoding="utf-8",
+        )
+        payload = self._lint(seeded_vault, "quote-integrity", monkeypatch)
+        issues = [i for i in payload["data"]["issues"] if i["rule"] == "quote-integrity"]
+        assert issues == []
+
+    def test_quote_integrity_short_quote_before_long_fabrication(
+        self, seeded_vault, monkeypatch
+    ):
+        report = seeded_vault.root / "research" / "notes" / "final_report_q.md"
+        report.write_text(
+            'The report discusses "Low Security" instruments with intervening prose '
+            "that must not be treated as part of a quoted span.\n"
+            'The paper concludes that "quantum entanglement reverses causality in every measurable frame of reference".',
+            encoding="utf-8",
+        )
+        payload = self._lint(seeded_vault, "quote-integrity", monkeypatch)
+        issues = [i for i in payload["data"]["issues"] if i["rule"] == "quote-integrity"]
+        assert len(issues) == 1
+        assert "quantum entanglement" in issues[0]["message"]
+        assert "Low Security" not in issues[0]["message"]
 
     def test_numeric_consistency_flags_untraceable(self, cited_vault, monkeypatch):
         report = cited_vault.root / "research" / "notes" / "final_report_n.md"

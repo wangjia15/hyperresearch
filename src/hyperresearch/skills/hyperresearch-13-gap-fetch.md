@@ -5,7 +5,7 @@ description: >
   vault gaps that critics identified. If a critic says "the draft ignored
   topic X" and the vault has zero sources on X, the patcher has nothing
   to cite. This step fetches the missing sources BEFORE patching so the
-  patcher has ammunition. Capped at 5 gaps. Invoked via Skill tool from
+  patcher has ammunition. Capped at 5 gaps. Invoked via <% if platform == "codex" %>step-file read<% else %>Skill tool<% endif %> from
   the entry skill (full tier).
 ---
 
@@ -34,7 +34,7 @@ Read these inputs:
 
 2. **For each qualifying finding, check whether the vault has evidence.** Run a targeted vault search for the topic the finding names:
    ```bash
-   $HPR search "<finding topic keywords>" --tag <vault_tag> --json
+   {hpr_path} search "<finding topic keywords>" --tag <vault_tag> --json
    ```
    If 2+ relevant notes exist, the patcher can handle it — move on. If 0-1 relevant notes exist, this is a **fetch-worthy gap**.
 
@@ -42,11 +42,11 @@ Read these inputs:
 
    If 0 fetch-worthy gaps: log "no gaps to fill" and proceed directly to step 14.
 
-4. **Run targeted fetch wave.** For each gap, generate 2-3 search queries and collect URLs. Spawn **<< p.gap_fetch_fetchers|hyphen >> fetchers** with the gap-filling URLs.
+4. **Run targeted fetch wave.** For each gap, generate 2-3 search queries and collect URLs. Spawn **<< p.gap_fetch_fetchers|hyphen >> fetchers** with the gap-filling URLs<% if platform == "codex" %> (custom agent `.codex/agents/hyperresearch-fetcher.toml` — spawn them in parallel and wait for all of them)<% else %><% endif %>.
 
    **Spawn template:**
    ```
-   << h.spawn_key >>: hyperresearch-fetcher
+   <% if platform == "codex" %>custom_agent: hyperresearch-fetcher   # spawn the custom agent defined in .codex/agents/hyperresearch-fetcher.toml<% else %><< h.spawn_key >>: hyperresearch-fetcher<% endif %>
    prompt: |
      RESEARCH QUERY (verbatim, gospel):
      > {{paste research/runs/<vault_tag>/query.md body}}
@@ -90,5 +90,5 @@ Read these inputs:
 Return to the entry skill (`hyperresearch`). Invoke step 14:
 
 ```
-<< h.load_skill("hyperresearch-14-patcher") >>
+<% if platform == "codex" %>cat .hyperresearch/codex/steps/hyperresearch-14-patcher.md<% else %><< h.load_skill("hyperresearch-14-patcher") >><% endif %>
 ```

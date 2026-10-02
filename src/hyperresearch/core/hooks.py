@@ -15,11 +15,20 @@ writes:
 Everything is rendered from one set of templates; `h` in a template is the
 target harness. Claude Code rendering is the reference and is pinned
 byte-for-byte by the golden prompt tests.
+
+OpenAI Codex (`platform="codex"`, see core/platforms.py) is installed as its
+own runtime rather than as a harness: the entry skill lands in
+`.agents/skills/hyperresearch/` (plus `agents/openai.yaml`), the step
+procedures are plain files in `.hyperresearch/codex/steps/`, the subagents
+are TOML custom agents in `.codex/agents/` (translated by core/codex.py; no
+browser-fetcher — it needs Claude-in-Chrome), and a Stop hook in
+`.codex/hooks.json` runs `hyperresearch run stop-gate`.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -41,13 +50,17 @@ def _set_render_state(
     config_path: Path | None,
     harness: Harness = CLAUDE,
     scope: str = "project",
+    platform: str = "claude",
 ) -> None:
-    """Set the active install pass: which profile, harness, and scope.
+    """Set the active install pass: which profile, harness, scope, and platform.
 
     `scope` is `"project"` (paths under `<root>/<config_dir>/`) or `"global"`
     (paths under the harness's user-level dir, e.g. `~/.omp/agent/`). One
     state object drives both rendering and destination resolution so a pass
     cannot render for one harness and write into another's directory.
+    `platform` selects the agent runtime ("claude" | "codex"): a Codex pass
+    renders `platform == "codex"` template branches and writes to the Codex
+    paths (see core/platforms.py).
     """
     global _RENDER_STATE
     from hyperresearch.core.render import build_render_context
@@ -56,7 +69,10 @@ def _set_render_state(
         "profile_name": profile_name,
         "harness": harness,
         "scope": scope,
-        "context": build_render_context(config_path, primary=profile_name, harness=harness),
+        "platform": platform,
+        "context": build_render_context(
+            config_path, primary=profile_name, harness=harness, platform=platform
+        ),
     }
 
 
@@ -104,20 +120,46 @@ def _normalize_harnesses(harnesses: Sequence[Harness | str] | None) -> tuple[Har
     return tuple(h if isinstance(h, Harness) else get_harness(h) for h in harnesses)
 
 
-def _render_installed(content: str) -> str:
-    """Render a prompt template and stamp the provenance header."""
-    from hyperresearch import __version__
+def _render_installed(
+    content: str, hpr_path: str = "hyperresearch", header: bool = True
+) -> str:
+    """Render a prompt template, resolve `{hpr_path}`, and stamp the provenance header.
+
+    Skills spell the CLI `{hpr_path}`, the placeholder the install pass fills
+    by plain replace — skills carry literal braces elsewhere, so this is not a
+    format call. `header=False` skips the stamp (the Codex agent translator
+    carries it as a TOML comment instead).
+    """
     from hyperresearch.core.render import (
         compact_frontmatter,
         insert_after_frontmatter,
-        render_header,
         render_prompt,
     )
 
     state = _get_render_state()
     rendered = compact_frontmatter(render_prompt(content, state["context"]))
-    header = render_header(state["profile_name"], __version__)
-    return insert_after_frontmatter(rendered, header)
+    rendered = rendered.replace("{hpr_path}", hpr_path.replace("\\", "/"))
+    if not header:
+        return rendered
+    return insert_after_frontmatter(rendered, _provenance_header())
+
+
+def _provenance_header() -> str:
+    from hyperresearch import __version__
+    from hyperresearch.core.render import render_header
+
+    return render_header(_get_render_state()["profile_name"], __version__)
+
+
+def _platform() -> str:
+    """The agent runtime the active render state targets ("claude" | "codex").
+
+    The render context and the install location must agree — a prompt
+    rendered for Codex written into .claude/ would be wrong on both counts —
+    so the per-file installers take their platform from the same state
+    `install_hooks(..., platform=)` sets.
+    """
+    return _get_render_state().get("platform", "claude")
 
 # Scaffold-only section headers that must NEVER appear in a final_report draft.
 # Used by critic agents (as detection patterns), the polish auditor, and the
@@ -3682,17 +3724,60 @@ export default function hyperresearch(pi) {{
 """
 
 
+def _agent_installers(platform: str) -> list:
+    """The subagent installers for a platform, in install order.
+
+    Codex gets every agent except the browser-fetcher, which drives the
+    user's Chrome through Claude-in-Chrome and has no Codex equivalent —
+    escalations stay queued for the human instead.
+    """
+    installers = [
+        _install_researcher_agent,
+        _install_loci_analyst_agent,
+        _install_depth_investigator_agent,
+        _install_source_analyst_agent,
+        _install_dialectic_critic_agent,
+        _install_instruction_critic_agent,
+        _install_depth_critic_agent,
+        _install_width_critic_agent,
+        _install_patcher_agent,
+        _install_polish_auditor_agent,
+        _install_readability_reformatter_agent,
+        _install_corpus_critic_agent,
+        _install_draft_orchestrator_agent,
+        _install_synthesizer_agent,
+        _install_browser_fetcher_agent,
+        _install_cite_checker_agent,
+    ]
+    if platform == "codex":
+        installers.remove(_install_browser_fetcher_agent)
+    return installers
+
+
+def _run_installers(installers) -> list[str]:
+    actions = []
+    for installer in installers:
+        result = installer()
+        if result:
+            actions.append(result)
+    return actions
+
+
 def install_hooks(
     vault_root: Path,
     hpr_path: str = "hyperresearch",
     profile: str = "full",
     harnesses: Sequence[Harness | str] | None = None,
+    platform: str = "claude",
 ) -> list[str]:
     """Install skills + subagents + the web reminder into each harness.
 
     Skill and agent prompts are rendered per harness from the given pipeline
     profile (plus any `[profile.*]` overlays in the vault's config.toml).
-    `harnesses` defaults to Claude Code alone.
+    `harnesses` defaults to Claude Code alone. `platform="codex"` runs the
+    Codex install instead (entry skill under .agents/skills/, step files in
+    .hyperresearch/codex/steps/, TOML agents in .codex/, a Stop hook in
+    .codex/hooks.json — see core/platforms.py).
 
     Hyperresearch roster (as of v7):
       fetcher (Layer 1, 3, 4), loci-analyst (Layer 2), depth-investigator (Layer 3),
@@ -3704,7 +3789,27 @@ def install_hooks(
     The browser-fetcher installs only on harnesses that can drive a real
     browser; elsewhere blocked fetches stay queued as escalations.
     """
+    from hyperresearch.core.platforms import CODEX, check_platform
+
+    check_platform(platform)
     config_path = vault_root / ".hyperresearch" / "config.toml"
+    if platform == CODEX:
+        _set_render_state(
+            profile,
+            config_path if config_path.exists() else None,
+            platform=platform,
+        )
+        agents = [
+            (lambda fn=fn: fn(vault_root, hpr_path)) for fn in _agent_installers(platform)
+        ]
+        return _run_installers([
+            lambda: _install_codex_stop_hook(vault_root, hpr_path),
+            lambda: _install_hyperresearch_skill(vault_root, hpr_path),
+            lambda: _install_hyperresearch_step_skills(vault_root, hpr_path),
+            *agents,
+            lambda: _prune_stale_codex_agents(vault_root),
+        ])
+
     actions: list[str] = []
 
     for harness in _normalize_harnesses(harnesses):
@@ -3712,12 +3817,13 @@ def install_hooks(
             profile,
             config_path if config_path.exists() else None,
             harness=harness,
+            platform=platform,
         )
 
         installers = [
             lambda: _install_reminder_hook(vault_root, hpr_path),
-            lambda: _install_hyperresearch_skill(vault_root),
-            lambda: _install_hyperresearch_step_skills(vault_root),
+            lambda: _install_hyperresearch_skill(vault_root, hpr_path),
+            lambda: _install_hyperresearch_step_skills(vault_root, hpr_path),
             lambda: _install_researcher_agent(vault_root, hpr_path),
             lambda: _install_loci_analyst_agent(vault_root, hpr_path),
             lambda: _install_depth_investigator_agent(vault_root, hpr_path),
@@ -3751,11 +3857,16 @@ def install_global_hooks(
     hpr_path: str = "hyperresearch",
     profile: str = "full",
     harnesses: Sequence[Harness | str] | None = None,
+    platform: str = "claude",
 ) -> list[str]:
     """Install the entry skill + agents at user level, for every harness.
 
     Destinations are the harnesses' own user-level roots: `~/.claude/`,
-    `~/.omp/agent/`, `~/.pi/agent/`.
+    `~/.omp/agent/`, `~/.pi/agent/`. `platform="codex"` installs to
+    `~/.agents/skills/hyperresearch/` + `~/.codex/agents/` instead. The
+    Codex install never touches ~/.codex/config.toml or ~/.codex/hooks.json —
+    global agent-tool config belongs to the user; the Stop hook is
+    per-project only.
 
     Unlike `install_hooks`, this skips:
       - The web-search reminder (don't want it firing in every session,
@@ -3777,17 +3888,33 @@ def install_global_hooks(
     Also prunes any hyperresearch-N-* step-skill dirs left in a harness's
     global skills dir by older versions (≤0.8.2 installed them globally).
     """
+    from hyperresearch.core.platforms import CODEX, check_platform
+
+    check_platform(platform)
     if home is None:
         home = Path.home()
+
+    # Codex global install — its own user-level roots, no reminder, no step
+    # skills (same lazy bootstrap as Claude Code). Global installs have no
+    # vault config — built-in profiles only.
+    _set_render_state(profile, None, platform=platform)
+
+    agents = [(lambda fn=fn: fn(home, hpr_path)) for fn in _agent_installers(platform)]
+    if platform == CODEX:
+        return _run_installers([
+            lambda: _install_hyperresearch_skill(home, hpr_path),
+            *agents,
+            lambda: _prune_stale_codex_agents(home),
+        ])
 
     actions: list[str] = []
 
     for harness in _normalize_harnesses(harnesses):
         # Global installs have no vault config — built-in profiles only.
-        _set_render_state(profile, None, harness=harness, scope="global")
+        _set_render_state(profile, None, harness=harness, scope="global", platform=platform)
 
         installers = [
-            lambda: _install_hyperresearch_skill(home),
+            lambda: _install_hyperresearch_skill(home, hpr_path),
             lambda: _install_researcher_agent(home, hpr_path),
             lambda: _install_loci_analyst_agent(home, hpr_path),
             lambda: _install_depth_investigator_agent(home, hpr_path),
@@ -3819,6 +3946,7 @@ def install_global_hooks(
 
 def install_step_skills(
     vault_root: Path,
+    hpr_path: str = "hyperresearch",
     profile: str = "full",
     harnesses: Sequence[Harness | str] | None = None,
 ) -> list[str]:
@@ -3836,7 +3964,7 @@ def install_step_skills(
             config_path if config_path.exists() else None,
             harness=harness,
         )
-        result = _install_hyperresearch_step_skills(vault_root)
+        result = _install_hyperresearch_step_skills(vault_root, hpr_path)
         if result:
             actions.append(result)
 
@@ -3972,7 +4100,15 @@ def _write_agent_file(
     content: str,
     label: str,
 ) -> str | None:
-    """Install a subagent file, returning the install message or None if unchanged."""
+    """Install a subagent file, returning the install message or None if unchanged.
+
+    `filename` is the agent name (`hyperresearch-X.md`); the destination is
+    the active harness's agents dir. Under a Codex render state the agent is
+    translated to `.codex/agents/hyperresearch-X.toml`.
+    """
+    if _platform() == "codex":
+        return _write_codex_agent_file(vault_root, filename, content, label)
+
     agents_dir = _agents_root(vault_root)
     agents_dir.mkdir(parents=True, exist_ok=True)
     agent_path = agents_dir / filename
@@ -3986,6 +4122,142 @@ def _write_agent_file(
 
     agent_path.write_text(content, encoding="utf-8")
     return f"{_active_harness().label}: {_rel(agent_path, vault_root)} ({label})"
+
+
+# An agent template's model line names its ModelMap role — either the bare
+# `model: << p.models.<role> >>` or the harness-wrapped
+# `<< h.model_line(p.models.<role>) >>`. The Codex translator reads the same
+# role out of `p.codex_models`.
+_MODEL_ROLE_RE = re.compile(
+    r"^(?:model:\s*)?<<\s*(?:h\.model_line\()?p\.models\.(\w+)", re.MULTILINE
+)
+
+
+def _write_codex_agent_file(
+    vault_root: Path, filename: str, content: str, label: str
+) -> str | None:
+    """Translate one agent template to Codex TOML at .codex/agents/<name>.toml."""
+    from hyperresearch.core.codex import agent_markdown_to_toml
+    from hyperresearch.core.platforms import CODEX, paths_for
+
+    paths = paths_for(CODEX)
+    toml_name = Path(filename).stem + paths.agent_suffix
+
+    role_match = _MODEL_ROLE_RE.search(content)
+    codex_model = None
+    if role_match:
+        codex_models = _get_render_state()["context"]["p"].codex_models
+        codex_model = getattr(codex_models, role_match.group(1), None)
+
+    rendered = agent_markdown_to_toml(
+        _render_installed(content, header=False),
+        header_comment=_provenance_header(),
+        codex_model=codex_model,
+    )
+
+    agents_dir = vault_root / paths.agents_dir
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    agent_path = agents_dir / toml_name
+    if agent_path.exists() and agent_path.read_text(encoding="utf-8") == rendered:
+        return None
+    agent_path.write_text(rendered, encoding="utf-8", newline="\n")
+    return f"Codex: {paths.agents_dir}/{toml_name} ({label})"
+
+
+# A Codex agent TOML we wrote starts with this provenance comment (see
+# render.render_header); nothing else in .codex/agents/ is ours to delete.
+_CODEX_AGENT_MARKER = "# <!-- rendered from profile"
+
+
+def _prune_stale_codex_agents(root: Path) -> str | None:
+    """Delete hyperresearch-*.toml agents we wrote that left the Codex roster.
+
+    Only files carrying our provenance comment are removed; a same-named file
+    the user wrote by hand is left alone.
+    """
+    from hyperresearch.core.platforms import CODEX, paths_for
+
+    paths = paths_for(CODEX)
+    agents_dir = root / paths.agents_dir
+    if not agents_dir.is_dir():
+        return None
+    expected = {
+        _codex_agent_filename(fn) for fn in _agent_installers(CODEX)
+    }
+    pruned: list[str] = []
+    for child in sorted(agents_dir.glob("hyperresearch-*.toml")):
+        if child.name in expected or not child.is_file():
+            continue
+        try:
+            head = child.read_text(encoding="utf-8", errors="replace")[:200]
+        except OSError:
+            continue
+        if not head.startswith(_CODEX_AGENT_MARKER):
+            continue
+        child.unlink()
+        pruned.append(child.name)
+    if not pruned:
+        return None
+    return f"Codex: pruned stale agents: {', '.join(pruned)}"
+
+
+# Installer function -> the Claude agent filename it writes. Kept beside the
+# installers so the Codex pruner's roster can never drift from what installs.
+_AGENT_FILENAMES: dict[str, str] = {
+    "_install_researcher_agent": "hyperresearch-fetcher.md",
+    "_install_loci_analyst_agent": "hyperresearch-loci-analyst.md",
+    "_install_depth_investigator_agent": "hyperresearch-depth-investigator.md",
+    "_install_source_analyst_agent": "hyperresearch-source-analyst.md",
+    "_install_dialectic_critic_agent": "hyperresearch-dialectic-critic.md",
+    "_install_instruction_critic_agent": "hyperresearch-instruction-critic.md",
+    "_install_depth_critic_agent": "hyperresearch-depth-critic.md",
+    "_install_width_critic_agent": "hyperresearch-width-critic.md",
+    "_install_patcher_agent": "hyperresearch-patcher.md",
+    "_install_polish_auditor_agent": "hyperresearch-polish-auditor.md",
+    "_install_readability_reformatter_agent": "hyperresearch-readability-recommender.md",
+    "_install_corpus_critic_agent": "hyperresearch-corpus-critic.md",
+    "_install_draft_orchestrator_agent": "hyperresearch-draft-orchestrator.md",
+    "_install_synthesizer_agent": "hyperresearch-synthesizer.md",
+    "_install_browser_fetcher_agent": "hyperresearch-browser-fetcher.md",
+    "_install_cite_checker_agent": "hyperresearch-cite-checker.md",
+}
+
+
+def _codex_agent_filename(installer) -> str:
+    return Path(_AGENT_FILENAMES[installer.__name__]).stem + ".toml"
+
+
+def _install_codex_stop_hook(vault_root: Path, hpr_path: str) -> str | None:
+    """Merge the stop-gate Stop hook into the project's .codex/hooks.json.
+
+    Per-project only — never ~/.codex. Foreign hooks are preserved; only our
+    own entry is replaced. No PreToolUse hook: `codex exec` mishandles
+    PreToolUse output, and the vault-check reminder is not worth that risk.
+    """
+    from hyperresearch.core.codex import merge_stop_hook
+
+    hooks_path = vault_root / ".codex" / "hooks.json"
+    settings: dict = {}
+    if hooks_path.exists():
+        # An unreadable hooks.json holds the user's hooks in a form we cannot
+        # merge into; overwriting it would destroy them.
+        try:
+            loaded = json.loads(hooks_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            loaded = None
+        if not isinstance(loaded, dict):
+            return (
+                "Codex: .codex/hooks.json is not a JSON object — Stop hook NOT "
+                "installed (fix the file, then re-run install)"
+            )
+        settings = loaded
+
+    merged = merge_stop_hook(settings, hpr_path)
+    if merged == settings:
+        return None
+    hooks_path.parent.mkdir(parents=True, exist_ok=True)
+    hooks_path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+    return "Codex: .codex/hooks.json (Stop hook: run stop-gate)"
 
 
 def _install_researcher_agent(vault_root: Path, hpr_path: str) -> str | None:
@@ -4304,18 +4576,23 @@ def _read_skill_source(src_name: str) -> str | None:
         return None
 
 
-def _install_hyperresearch_skill(vault_root: Path) -> str | None:
+def _install_hyperresearch_skill(vault_root: Path, hpr_path: str = "hyperresearch") -> str | None:
     """Install the entry skill at `<skills>/hyperresearch/SKILL.md`.
 
     The skill's `name: hyperresearch` frontmatter is what makes the harness
     offer it as a command (`/hyperresearch` on Claude Code,
     `/skill:hyperresearch` on OMP and Pi). The 18 step skills are installed
-    separately by `_install_hyperresearch_step_skills`.
+    separately by `_install_hyperresearch_step_skills`. Under a Codex render
+    state the skill goes to .agents/skills/hyperresearch/ instead (see
+    `_install_codex_entry_skill`).
     """
     content = _read_skill_source("hyperresearch.md")
     if content is None:
         return None
-    content = _render_installed(content)
+    content = _render_installed(content, hpr_path)
+
+    if _platform() == "codex":
+        return _install_codex_entry_skill(vault_root, content)
 
     harness = _active_harness()
     skill_dir = _skills_root(vault_root) / "hyperresearch"
@@ -4328,6 +4605,31 @@ def _install_hyperresearch_skill(vault_root: Path) -> str | None:
         f"{harness.label}: {_rel(dest_path, vault_root)} "
         f"({harness.invoke_command} trigger)"
     )
+
+
+def _install_codex_entry_skill(root: Path, content: str) -> str | None:
+    """Write the Codex entry skill + its agents/openai.yaml metadata.
+
+    Codex discovers `.agents/skills/<name>/SKILL.md` (and `~/.agents/skills`)
+    and invokes it as `$hyperresearch`; openai.yaml carries the display name
+    and allows implicit invocation from the skill description.
+    """
+    from hyperresearch.core.codex import OPENAI_SKILL_YAML
+    from hyperresearch.core.platforms import CODEX, paths_for
+
+    rel_dir = paths_for(CODEX).skills_dir / "hyperresearch"
+    skill_dir = root / rel_dir
+    changed: list[str] = []
+    for rel, text in (("SKILL.md", content), ("agents/openai.yaml", OPENAI_SKILL_YAML)):
+        dest = skill_dir / rel
+        if dest.exists() and dest.read_text(encoding="utf-8") == text:
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+        changed.append(rel)
+    if not changed:
+        return None
+    return f"Codex: {rel_dir}/{{{', '.join(changed)}}} ($hyperresearch trigger)"
 
 
 _HYPERRESEARCH_STEP_SKILLS = [
@@ -4382,7 +4684,9 @@ def step_skill_slug(step: str | None) -> str | None:
     return STEP_SKILL_BY_ID.get(str(step))
 
 
-def _install_hyperresearch_step_skills(vault_root: Path) -> str | None:
+def _install_hyperresearch_step_skills(
+    vault_root: Path, hpr_path: str = "hyperresearch"
+) -> str | None:
     """Install the 18 V8 step skills, each as its own skill directory.
 
     Each step skill lives at `<skills>/hyperresearch-N-name/SKILL.md` and is
@@ -4395,7 +4699,13 @@ def _install_hyperresearch_step_skills(vault_root: Path) -> str | None:
     Also prunes any stale `hyperresearch-*` skill directories (e.g. from a prior
     V8 layout where steps were numbered differently) so the user doesn't see
     obsolete entries in their skill list.
+
+    Under a Codex render state the steps are plain files instead — see
+    `_install_codex_step_files`.
     """
+    if _platform() == "codex":
+        return _install_codex_step_files(vault_root, hpr_path)
+
     skills_root = _skills_root(vault_root)
     skills_root.mkdir(parents=True, exist_ok=True)
 
@@ -4408,7 +4718,7 @@ def _install_hyperresearch_step_skills(vault_root: Path) -> str | None:
         content = _read_skill_source(src_name)
         if content is None:
             continue
-        content = _render_installed(content)
+        content = _render_installed(content, hpr_path)
 
         skill_dir = skills_root / skill_name
         skill_dir.mkdir(parents=True, exist_ok=True)
@@ -4446,3 +4756,70 @@ def _install_hyperresearch_step_skills(vault_root: Path) -> str | None:
         f"{_active_harness().label}: {_rel(skills_root, vault_root)}"
         f"/hyperresearch-N-*/SKILL.md ({'; '.join(parts)})"
     )
+
+
+def _install_codex_step_files(root: Path, hpr_path: str = "hyperresearch") -> str | None:
+    """Install the step procedures as plain files in .hyperresearch/codex/steps/.
+
+    Codex caps its skill listing and has no documented skill-to-skill
+    invocation, so the orchestrator reads `<steps_dir>/<step-name>.md` with
+    the shell instead of invoking a skill. Frontmatter and the provenance
+    header are kept — harmless to a reader, and they carry the render
+    provenance. Stale `hyperresearch-*.md` files we wrote are pruned.
+    """
+    from hyperresearch.core.platforms import CODEX, paths_for
+
+    rel_dir = paths_for(CODEX).steps_dir
+    steps_dir = root / rel_dir
+    steps_dir.mkdir(parents=True, exist_ok=True)
+
+    expected = {f"{name}.md" for name in _HYPERRESEARCH_STEP_SKILLS}
+    installed: list[str] = []
+    pruned: list[str] = []
+
+    for skill_name in _HYPERRESEARCH_STEP_SKILLS:
+        content = _read_skill_source(f"{skill_name}.md")
+        if content is None:
+            continue
+        content = _render_installed(content, hpr_path)
+        dest = steps_dir / f"{skill_name}.md"
+        if dest.exists() and dest.read_text(encoding="utf-8") == content:
+            continue
+        dest.write_text(content, encoding="utf-8")
+        installed.append(skill_name)
+
+    for child in steps_dir.glob("hyperresearch-*.md"):
+        if child.name in expected or not child.is_file():
+            continue
+        try:
+            text = child.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if "rendered from profile" not in text:
+            continue
+        child.unlink()
+        pruned.append(child.stem)
+
+    if not installed and not pruned:
+        return None
+    parts: list[str] = []
+    if installed:
+        parts.append(f"{len(installed)} step files: {', '.join(installed)}")
+    if pruned:
+        parts.append(f"pruned: {', '.join(sorted(pruned))}")
+    return f"Codex: {rel_dir}/hyperresearch-N-*.md ({'; '.join(parts)})"
+
+
+def installed_platforms(root: Path) -> list[str]:
+    """Platforms with a hyperresearch install in `root`, detected by entry skill.
+
+    Lets re-render paths (`hpr profile use`) refresh every runtime the
+    project was installed for instead of assuming Claude Code only.
+    """
+    from hyperresearch.core.platforms import PLATFORMS, paths_for
+
+    return [
+        platform
+        for platform in PLATFORMS
+        if (root / paths_for(platform).skills_dir / "hyperresearch" / "SKILL.md").is_file()
+    ]

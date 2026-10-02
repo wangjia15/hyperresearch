@@ -5,7 +5,7 @@ description: >
   from all depth investigators into research/runs/<vault_tag>/comparisons.md — << p.comparisons_tensions|hyphen >> named
   cross-locus tensions with engagement guidance for the draft. This is
   the structural step that gives the single draft argumentative density.
-  Invoked via Skill tool from the entry skill (full tier only).
+  Invoked via <% if platform == "codex" %>step-file read<% else %>Skill tool<% endif %> from the entry skill (full tier only).
 ---
 
 # Step 6 — Cross-locus reconciliation
@@ -25,7 +25,7 @@ description: >
 Read these inputs:
 - `research/runs/<vault_tag>/scaffold.md` — vault_tag
 - `research/runs/<vault_tag>/loci.json` — scored loci
-- All interim notes: `$HPR note list --tag <vault_tag> --type interim --all --json` then `$HPR note show <id1> <id2> ... -j`
+- All interim notes: `{hpr_path} note list --tag <vault_tag> --type interim --all --json` then `{hpr_path} note show <id1> <id2> ... -j`
 
 You need the `## Committed position` section from every interim note in your context.
 
@@ -78,5 +78,5 @@ You need the `## Committed position` section from every interim note in your con
 Return to the entry skill (`hyperresearch`). Invoke step 7:
 
 ```
-<< h.load_skill("hyperresearch-7-source-tensions") >>
+<% if platform == "codex" %>cat .hyperresearch/codex/steps/hyperresearch-7-source-tensions.md<% else %><< h.load_skill("hyperresearch-7-source-tensions") >><% endif %>
 ```

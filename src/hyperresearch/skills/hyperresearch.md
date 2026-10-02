@@ -1,7 +1,16 @@
 ---
 name: hyperresearch
 description: >
-  Deep research via the HYPERRESEARCH V8 architecture — a tier-adaptive 16-step
+<% if platform == "codex" %>  Deep research via the HYPERRESEARCH V8 pipeline (hyperresearch) — a tier-adaptive
+  16-step workflow (light / full / dissertation) that fetches sources into a local
+  vault, runs parallel custom-agent subagents (fetchers, depth investigators,
+  drafters, critics, patcher) and ships a cited report at
+  research/notes/final_report_<vault_tag>.md (<< p.time_estimate >> at the installed
+  scale gear). Use when the user invokes $hyperresearch or asks for deep research,
+  a literature review, or a sourced report. This entry skill is a ROUTER: it tells
+  you which step file under .hyperresearch/codex/steps/ to read and follow, in
+  order. Never answer the research question inline — run the pipeline to completion.
+<% else %>  Deep research via the HYPERRESEARCH V8 architecture — a tier-adaptive 16-step
   pipeline (light / full / dissertation) that scales from a ~30-minute light-tier
   answer to an adversarially-audited report at the installed scale gear
   (<< p.time_estimate >>). This entry skill is a ROUTER.
@@ -9,28 +18,34 @@ description: >
   for each step, in order. Each step's instructions live in its own skill
   file (`hyperresearch-1-decompose` through `hyperresearch-16-readability-audit`)
   and are loaded fresh into context when you invoke them.
----
+<% endif %>---
 
 # Hyperresearch V8 — multi-skill chain orchestrator
 
 You are the orchestrator. Your entire job in this conversation is:
 1. Read this file once at the start.
 2. Bootstrap canonical inputs (research_query, vault_tag, scaffold).
-3. Invoke each step skill in sequence (`<< h.load_skill("hyperresearch-N-stepname") >>`).
+<% if platform == "codex" %>3. Run each step in sequence by reading its step file (`.hyperresearch/codex/steps/<step-name>.md`) in full and following it.
+4. Between steps, do nothing except update your plan and (optionally) think to `research/runs/<vault_tag>/temp/orchestrator-notes.md`.
+
+You do NOT do the work of any step yourself. The step files do — and the subagents they tell you to spawn. You just sequence them.
+
+**THE JOB IS THE PIPELINE, NOT AN ANSWER.** Your deliverable is `research/notes/final_report_<vault_tag>.md`, produced by running this pipeline step by step until `{hpr_path} run finish <vault_tag> --json` reports `"passed": true`. Answering the research question in chat — from memory, from a few web searches, or from a single draft you write yourself — is a FAILURE, however good the answer looks. Do not summarize, shortcut, or "simulate" steps. Every step is recorded with `{hpr_path} run step`; a Stop hook checks the run manifest and will send you back to work if you try to finish while the run is mid-pipeline. **Spawning subagents is mandatory, not optional:** whenever a step file says to spawn a `hyperresearch-*` custom agent (defined in `.codex/agents/`), that sentence IS your explicit instruction to spawn it as a subagent — spawn every one it names, in parallel when it says so, and wait for all of them. Never do a subagent's work inline instead.
+<% else %>3. Invoke each step skill in sequence (`<< h.load_skill("hyperresearch-N-stepname") >>`).
 4. Between steps, do nothing except record your position and (optionally) think to `research/runs/<vault_tag>/temp/orchestrator-notes.md`.
 
 You do NOT do the work of any step yourself. The step skills do. You just sequence them.
-
+<% endif %>
 ---
 
-## This copy runs on << h.label >>
+## This copy runs on <% if platform == "codex" %>Codex<% else %><< h.label >><% endif %>
 
 The installer renders the pipeline for one harness. On this one:
 
-- **Start a run:** `<< h.invoke_command >> <query>`
-- **Load a step skill:** `<< h.load_skill("hyperresearch-N-stepname") >>`
-- **Spawn a subagent:** `<< h.spawn_syntax >>` — agent prompts live in `<< h.agents_rel >>/hyperresearch-*.md`
-- **Fan out a wave:** << h.parallel_note >>
+- **Start a run:** <% if platform == "codex" %>`$hyperresearch <query>`<% else %>`<< h.invoke_command >> <query>`<% endif %>
+- **Load a step skill:** <% if platform == "codex" %>read the step file in full (`cat .hyperresearch/codex/steps/hyperresearch-N-stepname.md`)<% else %>`<< h.load_skill("hyperresearch-N-stepname") >>`<% endif %>
+- **Spawn a subagent:** <% if platform == "codex" %>spawn the `hyperresearch-*` custom agents (`.codex/agents/hyperresearch-*.toml`) by name, only where a step file says to<% else %>`<< h.spawn_syntax >>` — agent prompts live in `<< h.agents_rel >>/hyperresearch-*.md`<% endif %>
+- **Fan out a wave:** <% if platform == "codex" %>spawn the wave's agents all at once, in one turn, and wait for all of them<% else %><< h.parallel_note >><% endif %>
 <% if not h.browser_lane %>- **No browser lane:** blocked fetches stay queued as escalations instead of being drained mid-run (see below).
 <% endif %><% if not h.supports("web_search") %>- **No web-search tool:** `hyperresearch search` / `hyperresearch scholar search` / `hyperresearch fetch` are the only web lanes, which is the posture the pipeline prefers anyway.
 <% endif %>
@@ -38,19 +53,25 @@ The installer renders the pipeline for one harness. On this one:
 
 ## How the chain works (READ THIS CAREFULLY)
 
-Each pipeline step is its own skill file. To run a step:
+<% if platform == "codex" %>Each pipeline step is its own step file. To run a step, read it in full (e.g. `cat .hyperresearch/codex/steps/hyperresearch-N-stepname.md` — read the WHOLE file, paging if your output is truncated) and follow it:
+
+```
+cat .hyperresearch/codex/steps/hyperresearch-N-stepname.md
+```
+
+When you read a step file, that step's full procedure is loaded into your context **fresh**. You then execute that step's procedure, hit its exit criterion, and return to the entry skill (this file) to run the next step.<% else %>Each pipeline step is its own skill file. To run a step:
 
 ```
 << h.load_skill("hyperresearch-N-stepname") >>
 ```
 
-Loading a step skill puts that skill's full procedure into your context **fresh**. You then execute that step's procedure, hit its exit criterion, and return to the entry skill (this file) to load the next step.
+Loading a step skill puts that skill's full procedure into your context **fresh**. You then execute that step's procedure, hit its exit criterion, and return to the entry skill (this file) to load the next step.<% endif %>
 
 **Why this design?** Context compaction. V7 was one 1200-line skill that got compacted away by the time Layer 4 needed its triple-draft procedure. The orchestrator forgot the procedure, wrote a single draft, and produced a flat-scoring report. V8 fixes this at the source: each step's procedure is loaded into context **only at the moment it's needed**, fresh, with no eviction risk.
 
 **The 16 step skills** (all prefixed `hyperresearch-`):
 
-| # | Skill name | What it does | Tiers |
+| # | <% if platform == "codex" %>Step file<% else %>Skill<% endif %> name | What it does | Tiers |
 |---|---|---|---|
 | 1 | `hyperresearch-1-decompose` | Canonical query → scaffold + decomposition + coverage matrix + tier classification | all |
 | 1.5 | `hyperresearch-1-5-chapter-partition` | Partition atomic items into << dissertation.chapters|dash >> chapters; steps 2–10 then loop per chapter | dissertation |
@@ -66,10 +87,10 @@ Loading a step skill puts that skill's full procedure into your context **fresh*
 | 11 | `hyperresearch-11-synthesize` | Synthesis plan + outline + spawn synthesizer subagent (two-pass write) → final_report.md | full |
 | 12 | `hyperresearch-12-critics` | 4 adversarial critics in parallel → findings JSONs | full |
 | 13 | `hyperresearch-13-gap-fetch` | Fetch sources for critic-identified vault gaps | full |
-| 14 | `hyperresearch-14-patcher` | Surgical Edit hunks applied to draft | full |
+| 14 | `hyperresearch-14-patcher` | Surgical <% if platform == "codex" %>patch<% else %>Edit<% endif %> hunks applied to draft | full |
 | 14.5 | `hyperresearch-14-5-cite-check` | Verify citation-sentence bindings; second small patcher pass | full |
-| 15 | `hyperresearch-15-polish` | Hygiene + filler pass (Edit-based subagent) | all |
-| 16 | `hyperresearch-16-readability-audit` | Readability recommender writes JSON suggestions; orchestrator selectively applies via Edit | all |
+| 15 | `hyperresearch-15-polish` | Hygiene + filler pass (<% if platform == "codex" %>patch<% else %>Edit<% endif %>-based subagent) | all |
+| 16 | `hyperresearch-16-readability-audit` | Readability recommender writes JSON suggestions; orchestrator selectively applies via <% if platform == "codex" %>apply_patch<% else %>Edit<% endif %> | all |
 
 ---
 
@@ -83,7 +104,7 @@ Step 1 classifies the query into a `pipeline_tier` (`light` / `full`). The tier 
 | `full` | 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 14.5 → 15 → 16 | << p.time_estimate >> |
 | `dissertation` | 1 → 1.5 (chapter partition) → [2 → … → 10 per chapter] → 6g/11 (global) → 12 → 13 → 14 → 14.5 → 15 → 16 | << dissertation.time_estimate >> |
 
-`dissertation` is opt-in only — the user must explicitly request it (or the run was initialized with `--profile dissertation`). Step 1 never auto-classifies into it. On dissertation runs, steps 2–10 loop per chapter (see `hyperresearch-1-5-chapter-partition`), with up to << dissertation.chapter_concurrency >> chapters in flight; each chapter stays within the proven << dissertation.chapter_source_target|dash >>-source envelope while the run totals << dissertation.source_target|dash >> sources.
+`dissertation` is opt-in only — the user must explicitly request it (or the run was initialized with `--profile dissertation`). Step 1 never auto-classifies into it. **It is experimental.** Its length, read-budget and citation targets are configured but nothing reads them yet (#103). Say so to the user before starting one. On dissertation runs, steps 2–10 loop per chapter (see `hyperresearch-1-5-chapter-partition`), with up to << dissertation.chapter_concurrency >> chapters in flight; each chapter stays within the proven << dissertation.chapter_source_target|dash >>-source envelope while the run totals << dissertation.source_target|dash >> sources.
 
 **RESPECT THE TIER GATE.** When step 1 classifies a query as `light`, do NOT run the skipped steps "just to be thorough." The tier classification is a product decision: simple queries should produce fast, right-sized answers. Trust the classification. If you're uncertain, tier up — but never silently upgrade every query to `full`.
 
@@ -97,7 +118,7 @@ Before you invoke any step skill, do this:
 
 0. **Auto-init if missing.** Two checks for the first-run-after-global-install case:
    - **Vault check.** If `.hyperresearch/` doesn't exist in the working directory, run `hyperresearch init . --json`. Creates the SQLite vault and `research/` directory.
-   - **Step-skills check.** If `<< h.skill_rel("hyperresearch-1-decompose") >>` doesn't exist relative to the working directory, run `hyperresearch install --steps-only . --harness << h.id >> --json`. Installs the 18 step skill files needed by the `<< h.load_skill("hyperresearch-N-...") >>` calls in later steps.
+<% if platform == "codex" %>   - **Step-files check.** If `.hyperresearch/codex/steps/hyperresearch-1-decompose.md` doesn't exist relative to the working directory, run `hyperresearch install --steps-only . --target codex --json`. Installs the 16 step files (and the `hyperresearch-*` custom agents) that later steps read and spawn.<% else %>   - **Step-skills check.** If `<< h.skill_rel("hyperresearch-1-decompose") >>` doesn't exist relative to the working directory, run `hyperresearch install --steps-only . --harness << h.id >> --json`. Installs the 18 step skill files needed by the `<< h.load_skill("hyperresearch-N-...") >>` calls in later steps.<% endif %>
 
    If either command fails because the binary isn't on PATH, tell the user to run `pip install hyperresearch` first. If both files already exist, both commands no-op cheaply — safe to run unconditionally.
 
@@ -143,7 +164,16 @@ Before you invoke any step skill, do this:
    - Tier rationale (filled in after step 1)
    - Wrapper requirements (save path, citation format, terminal sections)
 
-<% if h.supports("todo") %>6. **Seed the << h.tool("todo") >> list.** Create todos for all 16 step skill invocations using the integer step numbers, e.g.:
+<% if platform == "codex" %>6. **Seed your plan.** Use your plan tool (`update_plan`) to create one item per step, using the integer step numbers, e.g.:
+   - `Step 1 — hyperresearch-1-decompose`
+   - `Step 2 — hyperresearch-2-width-sweep`
+   - ... (through Step 16)
+
+   The plan and the run manifest are your durable memory of where you are in the chain.
+
+7. **Run step 1:** read `.hyperresearch/codex/steps/hyperresearch-1-decompose.md` in full and follow it.
+
+After step 1 returns, read `research/runs/<vault_tag>/prompt-decomposition.json` to learn the tier, then continue running step files per the tier routing table above. After each step's exit criterion is met, mark its plan item complete and move to the next.<% else %><% if h.supports("todo") %>6. **Seed the << h.tool("todo") >> list.** Create todos for all 16 step skill invocations using the integer step numbers, e.g.:
    - `Step 1 — Skill: hyperresearch-1-decompose`
    - `Step 2 — Skill: hyperresearch-2-width-sweep`
    - ... (through Step 16)
@@ -152,15 +182,17 @@ Before you invoke any step skill, do this:
 
 7. **Invoke step 1:** `<< h.load_skill("hyperresearch-1-decompose") >>`.
 
-After step 1 returns, read `research/runs/<vault_tag>/prompt-decomposition.json` to learn the tier, then continue invoking step skills per the tier routing table above. After each step's exit criterion is met, mark its todo complete and move to the next.
+After step 1 returns, read `research/runs/<vault_tag>/prompt-decomposition.json` to learn the tier, then continue invoking step skills per the tier routing table above. After each step's exit criterion is met, mark its todo complete and move to the next.<% endif %>
 
 ---
 
 ## Four canonical rules (ALWAYS in force)
 
-1. **NEVER EMIT BARE TEXT WHILE TASKS ARE RUNNING.** In non-interactive (`-p`) mode, a text-only response (no tool call) triggers `end_turn` — the process exits and the pipeline dies. Every response while subagent tasks are in flight MUST include a tool call. The best one is appending analytical thoughts to `research/runs/<vault_tag>/temp/orchestrator-notes.md`. Vault count checks at most once per minute.
+<% if platform == "codex" %>1. **NEVER END YOUR TURN MID-PIPELINE.** A message with no tool call ends your turn; in `codex exec` that ends the process and the pipeline dies. Keep working — step after step — until `run finish` passes (or the run is honestly `blocked`). While subagents are running, wait for them; if you want to think, append analytical thoughts to `research/runs/<vault_tag>/temp/orchestrator-notes.md`. Vault count checks at most once per minute.
 
-2. **PATCH, NEVER REGENERATE.** After step 11 produces the synthesized final report (or step 10 for light tier), the only modifications are surgical Edit hunks from step 14 (patcher) and step 15 (polish-auditor). Both subagents are tool-locked to `[Read, Edit]`. If a critic's finding would require rewriting a whole section, it escalates to you as a structural issue — not a rewrite. Keep hunks surgical.
+2. **PATCH, NEVER REGENERATE.** After step 11 produces the synthesized final report (or step 10 for light tier), the only modifications are surgical patch hunks from step 14 (patcher) and step 15 (polish-auditor). Both subagents may only read files and apply surgical patches to the report — never rewrite it whole. If a critic's finding would require rewriting a whole section, it escalates to you as a structural issue — not a rewrite. Keep hunks surgical.<% else %>1. **NEVER EMIT BARE TEXT WHILE TASKS ARE RUNNING.** In non-interactive (`-p`) mode, a text-only response (no tool call) triggers `end_turn` — the process exits and the pipeline dies. Every response while subagent tasks are in flight MUST include a tool call. The best one is appending analytical thoughts to `research/runs/<vault_tag>/temp/orchestrator-notes.md`. Vault count checks at most once per minute.
+
+2. **PATCH, NEVER REGENERATE.** After step 11 produces the synthesized final report (or step 10 for light tier), the only modifications are surgical Edit hunks from step 14 (patcher) and step 15 (polish-auditor). Both subagents are tool-locked to `[Read, Edit]`. If a critic's finding would require rewriting a whole section, it escalates to you as a structural issue — not a rewrite. Keep hunks surgical.<% endif %>
 
 3. **ARGUE, DON'T JUST REPORT** (full force for `argumentative` response_format; relaxed for `structured` and `short`). The pipeline is engineered to push the final report toward argumentative density. Loci must include at least one dialectical locus. Depth investigators must commit to a position. Step 6 forces cross-locus reconciliation. Step 11's synthesizer requires every body section that touches a tension to engage it explicitly.
 
@@ -170,9 +202,14 @@ After step 1 returns, read `research/runs/<vault_tag>/prompt-decomposition.json`
 
 ## Browser-lane escalations (all tiers)
 
-Blocked fetches (login walls, bot walls, captchas) are queued, not lost: `$HPR escalation list --status queued --tag <vault_tag> -j`.<% if h.browser_lane %> Step 2.8 drains the queue via ONE `hyperresearch-browser-fetcher` subagent driving the user's real Chrome browser. Two standing rules:
+<% if platform == "codex" %>Blocked fetches (login walls, bot walls, captchas) are queued, not lost: `{hpr_path} escalation list --status queued --tag <vault_tag> -j`. On Codex there is no browser lane — nothing drains the queue during the run. Two standing rules:
 
-1. **CAPTCHAs / logins / 2FA are ALWAYS the human's.** The browser-fetcher marks them `needs_human`; you consolidate ALL of them into ONE message to the user at a natural pause point (never one interruption per URL). In non-interactive runs, `$HPR run block <vault_tag> --on human-challenges` and continue with everything else.
+1. **Never block the pipeline on escalations.** Leave them queued and continue with everything else; the corpus is built from what headless fetching can reach.
+2. **Hand them to the human once, at the end.** In your final message, list every still-queued escalation for this run (URL + reason) in ONE consolidated list, so the user can fetch them in a browser and re-run. CAPTCHAs / logins / 2FA are ALWAYS the human's — never try to get around them.
+
+## Subagent spawn contract (applies to every subagent spawn)<% else %>Blocked fetches (login walls, bot walls, captchas) are queued, not lost: `{hpr_path} escalation list --status queued --tag <vault_tag> -j`.<% if h.browser_lane %> Step 2.8 drains the queue via ONE `hyperresearch-browser-fetcher` subagent driving the user's real Chrome browser. Two standing rules:
+
+1. **CAPTCHAs / logins / 2FA are ALWAYS the human's.** The browser-fetcher marks them `needs_human`; you consolidate ALL of them into ONE message to the user at a natural pause point (never one interruption per URL). In non-interactive runs, `{hpr_path} run block <vault_tag> --on human-challenges` and continue with everything else.
 2. **One browser-fetcher at a time.** It's the user's actual browser — parallel instances are chaos. Check the queue again after step 13 (gap-fetch) if new fetches got blocked.<% else %> This harness has no browser lane, so nothing drains the queue during the run: report the queued count in your step-2 summary, and tell the user at the end that those sources are recoverable by re-running the drain from a harness with a browser lane. Queued is the pre-4.0 status quo (source lost), never worse.<% endif %>
 
 ## Subagent spawn contract (applies to every spawn)
@@ -184,7 +221,7 @@ On this harness you spawn with:
 ```
 
 << h.parallel_note >>
-
+<% endif %>
 When a step skill instructs you to spawn a subagent, the prompt you pass MUST include three pieces near the top:
 
 1. **`research_query` — verbatim, block-quoted** from `research/runs/<vault_tag>/query.md`. Do not paraphrase, do not summarize.
@@ -193,9 +230,9 @@ When a step skill instructs you to spawn a subagent, the prompt you pass MUST in
 
 3. **The subagent's specific inputs** (vault_tag, output_path, locus, etc.). Each step skill's spawn template documents the required fields.
 
-4. **The run's shim file, pasted VERBATIM.** Step 1 renders posture shims (register / domain notes / inference depth) to `research/runs/<vault_tag>/shims/{research,drafting,critics,polish}.md`. Each step skill's spawn template names which shim its subagents receive; append that file's FULL contents to the end of the spawn prompt, unedited. You never write, summarize, or trim shim text — the file is the single source of truth. The cite-checker receives NO shim (verification is register-independent). If the shims directory is missing, run `$HPR levers render <vault_tag> -j` before spawning.
+4. **The run's shim file, pasted VERBATIM.** Step 1 renders posture shims (register / domain notes / inference depth) to `research/runs/<vault_tag>/shims/{research,drafting,critics,polish}.md`. Each step skill's spawn template names which shim its subagents receive; append that file's FULL contents to the end of the spawn prompt, unedited. You never write, summarize, or trim shim text — the file is the single source of truth. The cite-checker receives NO shim (verification is register-independent). If the shims directory is missing, run `{hpr_path} levers render <vault_tag> -j` before spawning.
 
-Skipping any of these in a spawn prompt is a process violation.
+Skipping any of these in a <% if platform == "codex" %>spawn message<% else %>spawn prompt<% endif %> is a process violation.
 
 ---
 
@@ -203,14 +240,15 @@ Skipping any of these in a spawn prompt is a process violation.
 
 Context compaction may eat parts of this conversation. If you're unsure what step you're on:
 
-0. **Read the run manifest FIRST.** `hyperresearch run resume <vault_tag> --json` (or with no tag for the newest run) returns the exact next step and the Skill invocation to continue with. This is the primary recovery path — the manifest records every step transition you logged via `hyperresearch run step`. The artifact scan below is the fallback for manifests that are missing or were not kept up to date.
-<% if h.supports("todo") %>1. **Check the << h.tool("todo") >> list.** It carries integer step numbers and survives compaction.<% else %>1. **Re-read the manifest's step history** (`hyperresearch run report <vault_tag> -j`). It carries every step transition you recorded and survives compaction.<% endif %>
+0. **Read the run manifest FIRST.** `hyperresearch run resume <vault_tag> --json` (or with no tag for the newest run) <% if platform == "codex" %>returns the exact next step — read that step's file (`.hyperresearch/codex/steps/<step-name>.md`) to continue. This is the primary recovery path — the manifest records every step transition you logged via `hyperresearch run step`. The artifact scan below is the fallback for manifests that are missing or were not kept up to date.
+1. **Check your plan.** It carries integer step numbers.<% else %>returns the exact next step and the Skill invocation to continue with. This is the primary recovery path — the manifest records every step transition you logged via `hyperresearch run step`. The artifact scan below is the fallback for manifests that are missing or were not kept up to date.
+<% if h.supports("todo") %>1. **Check the << h.tool("todo") >> list.** It carries integer step numbers and survives compaction.<% else %>1. **Re-read the manifest's step history** (`hyperresearch run report <vault_tag> -j`). It carries every step transition you recorded and survives compaction.<% endif %><% endif %>
 2. **Check disk artifacts (fallback).** Each step writes a canonical artifact:
    - Step 1: `research/runs/<vault_tag>/scaffold.md`, `research/runs/<vault_tag>/prompt-decomposition.json`, `research/runs/<vault_tag>/temp/coverage-matrix.md`
-   - Step 2: vault notes tagged with vault_tag (`$HPR note list --tag <vault_tag> --all -j`)
+   - Step 2: vault notes tagged with vault_tag (`{hpr_path} note list --tag <vault_tag> --all -j`)
    - Step 3: `research/runs/<vault_tag>/temp/contradiction-graph.json`, `research/runs/<vault_tag>/temp/consensus-claims.json`
    - Step 4: `research/runs/<vault_tag>/loci.json`
-   - Step 5: vault notes with `type: interim` (`$HPR note list --tag <vault_tag> --type interim --all -j`)
+   - Step 5: vault notes with `type: interim` (`{hpr_path} note list --tag <vault_tag> --type interim --all -j`)
    - Step 6: `research/runs/<vault_tag>/comparisons.md`
    - Step 7: `research/runs/<vault_tag>/temp/source-tensions.json`
    - Step 8: `research/runs/<vault_tag>/corpus-critic-gaps.json`, `research/runs/<vault_tag>/temp/corpus-critic-results.md`
@@ -223,7 +261,7 @@ Context compaction may eat parts of this conversation. If you're unsure what ste
    - Step 15: `research/runs/<vault_tag>/polish-log.json` (and edited final_report.md)
    - Step 16: `research/runs/<vault_tag>/readability-recommendations.json`, `research/runs/<vault_tag>/readability-decisions.json` (and edited final_report.md)
 3. **Find the highest-numbered step whose artifact exists.** Resume from the next step.
-4. **Re-invoke this entry skill** if you've lost track entirely: `<< h.load_skill("hyperresearch") >>`. It loads fresh.
+<% if platform == "codex" %>4. **Re-read this entry skill** if you've lost track entirely: `cat .agents/skills/hyperresearch/SKILL.md`. It loads fresh.<% else %>4. **Re-invoke this entry skill** if you've lost track entirely: `<< h.load_skill("hyperresearch") >>`. It loads fresh.<% endif %>
 
 If you're ever uncertain what to do next, the answer is: re-read this file and find the next step in the tier sequence.
 
@@ -248,8 +286,8 @@ done
 
 Then refresh retraction data and run the SHIP GATE:
 ```bash
-$HPR sources retractions --tag <vault_tag> --json   # ship-time retraction re-check (bypasses cache)
-$HPR run finish <vault_tag> --json                  # THE ship gate: verify + manifest flip
+{hpr_path} sources retractions --tag <vault_tag> --json   # ship-time retraction re-check (bypasses cache)
+{hpr_path} run finish <vault_tag> --json                  # THE ship gate: verify + manifest flip
 ```
 
 `run finish` runs the whole verification battery — report exists, required headings, **length within the profile's word target (±20%)**, citation density, tier artifacts, cite-check resolution, **quote-integrity**, and **retracted-citations** — and flips the manifest to `done` only when every check passes. On failure it flips the run to `blocked (verify)` and exits 1.
@@ -257,19 +295,19 @@ $HPR run finish <vault_tag> --json                  # THE ship gate: verify + ma
 **The gate's verdict is final. You may not re-run individual rules and re-classify their errors as false positives.** If a check fails, change the REPORT until the gate passes:
 
 - `length-in-range` over the ceiling → spawn the synthesizer for ONE compression pass (its own output as input, target = middle of the word range). Do not re-run the critics afterward — go straight back to `run finish`.
-- `quote-integrity` → quotation marks are reserved for verbatim source text. Rhetorical or framing "quotes" lose their quotation marks (rewrite as plain or italicized prose via Edit); real quotes get fixed to verbatim or cut.
+- `quote-integrity` → quotation marks are reserved for verbatim source text. Rhetorical or framing "quotes" lose their quotation marks (rewrite as plain or italicized prose via <% if platform == "codex" %>apply_patch<% else %>Edit<% endif %>); real quotes get fixed to verbatim or cut.
 - `retracted-citations` → acknowledge the retraction in the sentence or remove the citation.
 - Anything else → fix the specific artifact the check names.
 
-Re-run `$HPR run finish <vault_tag> --json` after each fix round. Maximum 3 rounds; if the gate still fails, leave the run `blocked` and report the failing checks to the user honestly — a blocked run with a true manifest beats a shipped report that lies. Optional advisory: `$HPR lint --rule numeric-consistency --json` (warnings only, never blocks).
+Re-run `{hpr_path} run finish <vault_tag> --json` after each fix round. Maximum 3 rounds; if the gate still fails, leave the run `blocked` and report the failing checks to the user honestly — a blocked run with a true manifest beats a shipped report that lies. Optional advisory: `{hpr_path} lint --rule numeric-consistency --json` (warnings only, never blocks).
 
-Ship only after `run finish` reports `"passed": true`: the final report lives at `research/notes/final_report_<vault_tag>.md`.
+Ship only after `run finish` reports `"passed": true`: the final report lives at `research/notes/final_report_<vault_tag>.md`.<% if platform == "codex" %> Your final message names that path and lists any still-queued escalations for this run (see Browser-lane escalations).<% endif %>
 
 ---
 
 ## Invariants you cannot break
 
-1. **PATCHING not REGENERATION after step 11.** Once step 11 produces the final report (or step 10 for light tier), modifications are surgical Edit hunks only.
+1. **PATCHING not REGENERATION after step 11.** Once step 11 produces the final report (or step 10 for light tier), modifications are surgical <% if platform == "codex" %>patch<% else %>Edit<% endif %> hunks only.
 2. **One final report.** Step 11's synthesizer writes the final report ONCE. No re-synthesizing. (Light tier: step 10 writes it once.)
 3. **At least one dialectical locus.** Step 4 must surface ≥1 dialectical locus unless skip is justified.
 4. **Every interim note commits to a position.** Step 5 investigators end with `## Committed position`.
@@ -279,9 +317,9 @@ Ship only after `run finish` reports `"passed": true`: the final report lives at
 8. **Hygiene rules apply to the final report only.** Workspace artifacts (scaffold, loci JSONs, interim notes, comparisons.md, patch log) can look however they need to look.
 9. **NEVER skip a step that the tier gate says to run.** For `full` tier, ALL 16 steps run. For `light`, the prescribed 5 steps run.
 10. **Step 10 triple-draft ensemble is MANDATORY for `full` tier.** You MUST spawn 3 `hyperresearch-draft-orchestrator` subagents. Writing `research/notes/final_report_<vault_tag>.md` directly in step 10 (instead of going through the synthesizer in step 11) is a PIPELINE VIOLATION for these tiers.
-11. **Step 11 synthesis is MANDATORY for `full` tier.** The synthesizer subagent (Read+Write tool-locked) writes the final report from the 3 drafts. The orchestrator does NOT write the final report itself for these tiers.
+11. **Step 11 synthesis is MANDATORY for `full` tier.** The synthesizer subagent (<% if platform == "codex" %>reads its inputs and writes files only<% else %>Read+Write tool-locked<% endif %>) writes the final report from the 3 drafts. The orchestrator does NOT write the final report itself for these tiers.
 12. **Subagents read full source text.** Draft sub-orchestrators MUST batch-read every note in their `must_read_note_ids` list before writing. Fetchers MUST chase 3-8 primary sources via citation chains.
-13. **NEVER emit a bare text response while subagent tasks are in flight.**
+<% if platform == "codex" %>13. **NEVER end your turn while the run is mid-pipeline** — and never answer the research question in chat instead of running the pipeline.<% else %>13. **NEVER emit a bare text response while subagent tasks are in flight.**<% endif %>
 14. **A run is complete ONLY when `run finish` reports `passed: true`.** Gate failures are fixed by changing the report, never by re-interpreting, downgrading, or memo-ing away the checks. If 3 fix rounds don't clear the gate, the run stays `blocked` and you say so.
 15. **Shim files are pasted verbatim.** The lever shims under `research/runs/<vault_tag>/shims/` go into spawn prompts whole and unedited, per the spawn contract. The orchestrator never composes, summarizes, or omits shim text, and never gives the cite-checker one.
 
@@ -291,7 +329,21 @@ Ship only after `run finish` reports `"passed": true`: the final report lives at
 
 V7 was one 1200-line skill loaded once. By Layer 4 (line ~2200 in a 3000-line conversation), context compaction had evicted the procedure. The orchestrator silently dropped Layer 3.7 (corpus critic), rewrote its todo to replace the triple-draft ensemble with a single draft, and produced a flat-scoring report. This happened in 100% of runs where the orchestrator didn't re-read the skill file.
 
-V8 makes re-reading structural. Each step skill is loaded fresh via the `Skill` tool at the moment it's needed. The procedure is in context exactly when it matters. Compaction can evict an old step's procedure — that's fine, the orchestrator never needs it again because each step is self-contained and reads its inputs from disk.
+<% if platform == "codex" %>V8 makes re-reading structural. Each step file is read fresh at the moment it's needed. The procedure is in context exactly when it matters. Compaction can evict an old step's procedure — that's fine, the orchestrator never needs it again because each step is self-contained and reads its inputs from disk.
+
+The trade: 16 step files instead of 1, plus 16 file reads over the run. The cost is negligible; the reliability gain is the difference between Q57 (55.9, full pipeline) and Q9 (52.6, single-draft fallback).
+
+---
+
+## Now begin
+
+If you've read this far and the bootstrap (above) is done, run step 1 — read this file in full and follow it:
+
+```
+cat .hyperresearch/codex/steps/hyperresearch-1-decompose.md
+```
+
+If the bootstrap is NOT done, do the bootstrap first, then run step 1. Do not stop until the final integrity gate passes.<% else %>V8 makes re-reading structural. Each step skill is loaded fresh via the `Skill` tool at the moment it's needed. The procedure is in context exactly when it matters. Compaction can evict an old step's procedure — that's fine, the orchestrator never needs it again because each step is self-contained and reads its inputs from disk.
 
 The trade: 16 skill files instead of 1, plus 16 invocations of the `Skill` tool over the run. The cost is negligible; the reliability gain is the difference between Q57 (55.9, full pipeline) and Q9 (52.6, single-draft fallback).
 
@@ -305,4 +357,4 @@ If you've read this far and the bootstrap (above) is done, invoke step 1:
 << h.load_skill("hyperresearch-1-decompose") >>
 ```
 
-If the bootstrap is NOT done, do the bootstrap first, then invoke step 1.
+If the bootstrap is NOT done, do the bootstrap first, then invoke step 1.<% endif %>

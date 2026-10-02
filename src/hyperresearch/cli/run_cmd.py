@@ -7,13 +7,14 @@ import json
 import typer
 
 from hyperresearch.cli._output import console, output
+from hyperresearch.core.vault import VaultError
 from hyperresearch.models.output import error, success
 
 app = typer.Typer()
 
 
 def _vault_or_exit(json_output: bool):
-    from hyperresearch.core.vault import Vault, VaultError
+    from hyperresearch.core.vault import Vault
 
     try:
         return Vault.discover()
@@ -59,7 +60,7 @@ def run_init(
         query = Path(query_file).read_text(encoding="utf-8-sig")
     try:
         manifest = init_run(vault, vault_tag, profile=profile, budget_usd=budget, query=query)
-    except RunError as e:
+    except (RunError, VaultError) as e:
         if json_output:
             output(error(str(e), "RUN_ERROR"), json_mode=True)
         else:
@@ -86,7 +87,7 @@ def run_status(
     tag = _resolve_tag(vault, vault_tag, json_output)
     try:
         summary = status_summary(vault, tag)
-    except RunError as e:
+    except (RunError, VaultError) as e:
         if json_output:
             output(error(str(e), "RUN_ERROR"), json_mode=True)
         else:
@@ -162,20 +163,20 @@ def run_resume(
 ) -> None:
     """Print the exact position a recovering orchestrator should continue from."""
     from hyperresearch.core.hooks import step_skill_slug
-    from hyperresearch.core.runs import RunError, load_manifest, resume_position, set_status
+    from hyperresearch.core.runs import RunError, load_manifest, run_resume_position, set_status
 
     vault = _vault_or_exit(json_output)
     tag = _resolve_tag(vault, vault_tag, json_output)
     try:
         manifest = load_manifest(vault, tag)
-    except RunError as e:
+    except (RunError, VaultError) as e:
         if json_output:
             output(error(str(e), "RUN_ERROR"), json_mode=True)
         else:
             console.print(f"[red]Error:[/] {e}")
         raise typer.Exit(1)
 
-    position = resume_position(manifest)
+    position = run_resume_position(vault, manifest)
     if manifest["status"] in ("paused", "blocked", "failed"):
         set_status(vault, tag, "running")
 
@@ -188,6 +189,8 @@ def run_resume(
         # string substitution — "2" must come back as the invokable
         # `hyperresearch-2-width-sweep`, never a bare `hyperresearch-2`.
         "skill_to_invoke": step_skill_slug(position["next_step"]),
+        # Codex has no step skills: the orchestrator reads this file instead.
+        "codex_step_file": _codex_step_file(step_skill_slug(position["next_step"])),
     }
     if json_output:
         output(success(data, vault=str(vault.root)), json_mode=True)
@@ -197,6 +200,63 @@ def run_resume(
         else:
             console.print(f"[green]{tag}[/] — resume at step {position['next_step']}")
             console.print(f"  Skill(skill: \"{data['skill_to_invoke']}\")")
+
+
+def _codex_step_file(skill: str | None) -> str | None:
+    """Project-relative path of a step's Codex procedure file, or None."""
+    if skill is None:
+        return None
+    from hyperresearch.core.platforms import CODEX, paths_for
+
+    return f"{paths_for(CODEX).steps_dir}/{skill}.md"
+
+
+@app.command("stop-gate", hidden=True)
+def run_stop_gate() -> None:
+    """Codex Stop hook: block ending the session while the newest run is mid-pipeline.
+
+    Reads the hook's JSON input on stdin. Prints one
+    `{"decision": "block", "reason": ...}` object when the newest run is
+    running, was touched in the last 6 hours, and has a next step; prints
+    nothing otherwise. Always exits 0 and never raises — a broken gate must
+    not wedge the agent. Set HYPERRESEARCH_STOP_GATE=0 to disable.
+    """
+    import os
+    import sys
+
+    try:
+        from hyperresearch.core.codex import STOP_GATE_ENV, stop_gate_decision
+
+        if os.environ.get(STOP_GATE_ENV, "").strip().lower() in ("0", "false", "no", "off"):
+            return
+        try:
+            raw = sys.stdin.read() if sys.stdin is not None else ""
+            payload = json.loads(raw) if raw.strip() else {}
+        except (OSError, ValueError):
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        # Already continuing because of a previous block: let it stop, or a
+        # run that can't advance would loop forever.
+        if payload.get("stop_hook_active"):
+            return
+
+        from pathlib import Path
+
+        from hyperresearch.core.vault import Vault
+
+        cwd = payload.get("cwd")
+        start = Path(cwd) if isinstance(cwd, str) and cwd else None
+        try:
+            vault = Vault.discover(start)
+        except VaultError:
+            return
+        decision = stop_gate_decision(vault)
+        if decision is not None:
+            sys.stdout.write(json.dumps(decision) + "\n")
+            sys.stdout.flush()
+    except Exception:
+        return
 
 
 @app.command("abort")
@@ -210,7 +270,7 @@ def run_abort(
     vault = _vault_or_exit(json_output)
     try:
         manifest = set_status(vault, vault_tag, "aborted")
-    except RunError as e:
+    except (RunError, VaultError) as e:
         if json_output:
             output(error(str(e), "RUN_ERROR"), json_mode=True)
         else:
@@ -236,7 +296,7 @@ def run_step(
     vault = _vault_or_exit(json_output)
     try:
         manifest = set_step(vault, vault_tag, step, status, chapter=chapter)
-    except RunError as e:
+    except (RunError, VaultError) as e:
         if json_output:
             output(error(str(e), "RUN_ERROR"), json_mode=True)
         else:
@@ -267,7 +327,7 @@ def run_spend(
             estimated_usd=usd, sources_fetched=sources,
             notes_written=notes, agents_spawned=agents,
         )
-    except RunError as e:
+    except (RunError, VaultError) as e:
         if json_output:
             output(error(str(e), "RUN_ERROR"), json_mode=True)
         else:
@@ -303,7 +363,7 @@ def run_event(
             raise typer.Exit(1)
     try:
         record_event(vault, vault_tag, payload)
-    except RunError as e:
+    except (RunError, VaultError) as e:
         if json_output:
             output(error(str(e), "RUN_ERROR"), json_mode=True)
         else:
@@ -327,7 +387,7 @@ def run_block(
     vault = _vault_or_exit(json_output)
     try:
         manifest = set_status(vault, vault_tag, "blocked", blocked_on=on)
-    except RunError as e:
+    except (RunError, VaultError) as e:
         if json_output:
             output(error(str(e), "RUN_ERROR"), json_mode=True)
         else:
@@ -362,7 +422,7 @@ def run_report(
                 continue
             try:
                 reports.append(run_report_data(vault, tag))
-            except RunError:
+            except (RunError, VaultError):
                 continue
         agg = {
             "runs": len(reports),
@@ -385,7 +445,7 @@ def run_report(
     try:
         load_manifest(vault, tag)
         report = run_report_data(vault, tag)
-    except RunError as e:
+    except (RunError, VaultError) as e:
         if json_output:
             output(error(str(e), "RUN_ERROR"), json_mode=True)
         else:
@@ -424,7 +484,7 @@ def run_verify(
     tag = _resolve_tag(vault, vault_tag, json_output)
     try:
         result = verify_run(vault, tag)
-    except RunError as e:
+    except (RunError, VaultError) as e:
         if json_output:
             output(error(str(e), "RUN_ERROR"), json_mode=True)
         else:
@@ -460,7 +520,7 @@ def run_finish(
     tag = _resolve_tag(vault, vault_tag, json_output)
     try:
         result = finish_run(vault, tag)
-    except RunError as e:
+    except (RunError, VaultError) as e:
         if json_output:
             output(error(str(e), "RUN_ERROR"), json_mode=True)
         else:
