@@ -135,16 +135,16 @@ The profile's ModelMap assigns every agent a tier; the harness turns a tier into
 
 | Tier | Steps | Claude Code | OMP | Pi |
 |---|---|---|---|---|
-| reading volume | fetcher, source-analyst, loci-analyst, depth-investigator, corpus-critic, cite-checker, browser-fetcher | `sonnet` | `zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash` | inherits the child's model |
-| judgment | draft-orchestrators, synthesizer, 4 critics, patcher, polish-auditor, readability-recommender | `opus` | `zhipu-coding-plan/glm-5.3, zai/glm-5.3` | inherits the child's model |
+| reading volume | fetcher, source-analyst, loci-analyst, depth-investigator, corpus-critic, cite-checker, browser-fetcher | `sonnet` | `zai/glm-5.3-flash` | inherits the child's model |
+| judgment | draft-orchestrators, synthesizer, 4 critics, patcher, polish-auditor, readability-recommender | `opus` | `zai/glm-5.3` | inherits the child's model |
 
-OMP selectors are fallback chains: it tries each entry in order and drops back to the parent session's model if none resolves, so a machine without those credentials degrades instead of failing the spawn. Pin your own per vault:
+OMP selectors may be comma-separated fallback chains: OMP tries each entry in order and drops back to the parent session's model if none resolves, so a machine without the credential degrades instead of failing the spawn. The shipped defaults are single `zai` selectors. Pin your own per vault:
 
 ```toml
 # .hyperresearch/config.toml
 [harness.models.omp]
-sonnet = "zhipu-coding-plan/glm-5.3-flash"
-opus = "zhipu-coding-plan/glm-5.3:high"   # thinking suffix allowed
+sonnet = "zai/glm-5.3-flash"
+opus = "zai/glm-5.3:high"   # thinking suffix allowed
 
 [harness.models.pi]
 opus = "glm-5.3"                          # pi resolves the id fuzzily

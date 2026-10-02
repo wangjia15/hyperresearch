@@ -281,15 +281,15 @@ OMP = Harness(
         # omp drives a real browser from the `eval` tool's `browser` global.
         "browser": "eval",
     },
-    # GLM through the Zhipu coding plan first, the direct zai endpoint second:
-    # omp tries a CSV `model:` in order and falls back to the parent session's
-    # model when nothing resolves, so a machine with neither credential
-    # degrades instead of failing the spawn. Override per vault with
-    # `[harness.models.omp]`.
+    # GLM via the direct zai endpoint: omp falls back to the parent
+    # session's model when the selector does not resolve, so a machine
+    # without the credential degrades instead of failing the spawn. The
+    # value is a single selector; a CSV chain still works if you override
+    # per vault with `[harness.models.omp]`.
     model_aliases={
-        "haiku": "zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash",
-        "sonnet": "zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash",
-        "opus": "zhipu-coding-plan/glm-5.3, zai/glm-5.3",
+        "haiku": "zai/glm-5.3-flash",
+        "sonnet": "zai/glm-5.3-flash",
+        "opus": "zai/glm-5.3",
     },
     spawn_key="agent",
     spawn_mode="task-tool",

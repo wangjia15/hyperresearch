@@ -56,11 +56,10 @@ class TestModelLine:
 
     def test_omp_maps_the_two_tiers_to_glm_models(self):
         # Reading/fetching volume runs on flash; judgment steps on glm-5.3.
-        # Each selector is a fallback chain omp tries in order.
-        assert OMP.model_line("sonnet") == (
-            "model: zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash"
-        )
-        assert OMP.model_line("opus") == "model: zhipu-coding-plan/glm-5.3, zai/glm-5.3"
+        # A single zai selector; omp falls back to the session model if it
+        # does not resolve.
+        assert OMP.model_line("sonnet") == "model: zai/glm-5.3-flash"
+        assert OMP.model_line("opus") == "model: zai/glm-5.3"
 
     def test_pi_omits_the_line_and_inherits_the_parent_model(self):
         # Anthropic tier aliases would not resolve on a Gemini/GLM setup;
@@ -68,11 +67,11 @@ class TestModelLine:
         assert PI.model_line("sonnet") == ""
 
     def test_vault_overrides_replace_only_the_named_tiers(self):
-        tuned = OMP.with_models({"opus": "zhipu-coding-plan/glm-5.3:high"})
-        assert tuned.model_line("opus") == "model: zhipu-coding-plan/glm-5.3:high"
+        tuned = OMP.with_models({"opus": "zai/glm-5.3:high"})
+        assert tuned.model_line("opus") == "model: zai/glm-5.3:high"
         assert tuned.model_line("sonnet") == OMP.model_line("sonnet")
         # The built-in harness object is not mutated by an override.
-        assert OMP.model_line("opus") == "model: zhipu-coding-plan/glm-5.3, zai/glm-5.3"
+        assert OMP.model_line("opus") == "model: zai/glm-5.3"
 
     def test_an_empty_override_omits_the_line(self):
         assert OMP.with_models({"opus": ""}).model_line("opus") == ""
@@ -153,14 +152,14 @@ class TestProjectInstall:
 
         body = fetcher.read_text(encoding="utf-8")
         assert "tools: bash, read, write, web_search" in body
-        assert "model: zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash" in body
+        assert "model: zai/glm-5.3-flash" in body
         assert "read skill://" in entry.read_text(encoding="utf-8")
 
         # Judgment steps get the stronger model, reading volume the flash one.
         patcher = (
             tmp_vault.root / ".omp" / "agents" / "hyperresearch-patcher.md"
         ).read_text(encoding="utf-8")
-        assert "model: zhipu-coding-plan/glm-5.3, zai/glm-5.3" in patcher
+        assert "model: zai/glm-5.3" in patcher
 
     def test_pi_layout_drops_tools_it_has_not_got(self, tmp_vault):
         install_hooks(tmp_vault.root, "hpr", harnesses=["pi"])

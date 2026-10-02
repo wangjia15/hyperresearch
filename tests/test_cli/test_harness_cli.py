@@ -83,7 +83,7 @@ class TestInstallHarnessFlag:
     def test_vault_model_overrides_reach_the_installed_agents(self, tmp_vault, monkeypatch):
         monkeypatch.chdir(tmp_vault.root)
         config = VaultConfig.load(tmp_vault.config_path)
-        config.harness_models = {"omp": {"opus": "zhipu-coding-plan/glm-5.3:high"}}
+        config.harness_models = {"omp": {"opus": "zai/glm-5.3:high"}}
         config.save(tmp_vault.config_path)
 
         result = runner.invoke(
@@ -97,12 +97,12 @@ class TestInstallHarnessFlag:
         fetcher = (
             tmp_vault.root / ".omp" / "agents" / "hyperresearch-fetcher.md"
         ).read_text(encoding="utf-8")
-        assert "model: zhipu-coding-plan/glm-5.3:high" in patcher
+        assert "model: zai/glm-5.3:high" in patcher
         # Untouched tier keeps the built-in selector.
-        assert "model: zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash" in fetcher
+        assert "model: zai/glm-5.3-flash" in fetcher
         # And the override survives the config round-trip.
         assert VaultConfig.load(tmp_vault.config_path).harness_models == {
-            "omp": {"opus": "zhipu-coding-plan/glm-5.3:high"}
+            "omp": {"opus": "zai/glm-5.3:high"}
         }
 
 

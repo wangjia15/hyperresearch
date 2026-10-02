@@ -40,30 +40,30 @@ Two models cover the whole pipeline:
 - **`glm-5.3-flash`** — reading volume. Fetching, extraction, per-locus investigation, citation verification. Many parallel instances, large inputs, mechanical-to-moderate judgment.
 - **`glm-5.3`** — writing and judgment. Drafting, synthesis, adversarial critique, patching, polish. Few instances, load-bearing output.
 
-Every selector is a **fallback chain**: OMP tries the entries left to right and drops back to the parent session's model if none resolves. That is why the Zhipu coding plan comes first and the direct `zai` endpoint second — a machine with only one of those credentials still runs, and a machine with neither degrades to whatever model the session is already on instead of failing the spawn.
+Every selector may be a **fallback chain**: OMP tries the entries left to right and drops back to the parent session's model if none resolves — a machine without the credential degrades instead of failing the spawn. The shipped defaults are single `zai` selectors; add your own chain per vault if you have a second provider.
 
 | Step | Runs as | Instances | Model |
 |---|---|---|---|
 | 1 Decompose | orchestrator | — | your session model |
 | 1.5 Chapter partition (dissertation) | orchestrator | — | your session model |
-| 2 Width sweep | `hyperresearch-fetcher` | 10–12 per wave (`full`), 14–18 (`premier`) | `zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash` |
-| 2 · long-source reads | `hyperresearch-source-analyst` | on demand, 1 per source | `zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash` |
-| 2.8 Escalation drain | `hyperresearch-browser-fetcher` | exactly 1 (one browser) | `zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash` |
+| 2 Width sweep | `hyperresearch-fetcher` | 10–12 per wave (`full`), 14–18 (`premier`) | `zai/glm-5.3-flash` |
+| 2 · long-source reads | `hyperresearch-source-analyst` | on demand, 1 per source | `zai/glm-5.3-flash` |
+| 2.8 Escalation drain | `hyperresearch-browser-fetcher` | exactly 1 (one browser) | `zai/glm-5.3-flash` |
 | 3 Contradiction graph | orchestrator | — | your session model |
-| 4 Loci analysis | `hyperresearch-loci-analyst` | 2 (`full`), 3 (`premier`) | `zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash` |
-| 5 Depth investigation | `hyperresearch-depth-investigator` | up to 6 (`full`), 10 (`premier`) | `zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash` |
+| 4 Loci analysis | `hyperresearch-loci-analyst` | 2 (`full`), 3 (`premier`) | `zai/glm-5.3-flash` |
+| 5 Depth investigation | `hyperresearch-depth-investigator` | up to 6 (`full`), 10 (`premier`) | `zai/glm-5.3-flash` |
 | 6 Cross-locus reconcile | orchestrator | — | your session model |
 | 7 Source tensions | orchestrator | — | your session model |
-| 8 Corpus critic | `hyperresearch-corpus-critic` + gap-fill `hyperresearch-fetcher` | 1 + N | `zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash` |
+| 8 Corpus critic | `hyperresearch-corpus-critic` + gap-fill `hyperresearch-fetcher` | 1 + N | `zai/glm-5.3-flash` |
 | 9 Evidence digest | orchestrator | — | your session model |
-| 10 Triple draft | `hyperresearch-draft-orchestrator` | 3, parallel | `zhipu-coding-plan/glm-5.3, zai/glm-5.3` |
-| 11 Synthesize | `hyperresearch-synthesizer` | 1 (two-pass) | `zhipu-coding-plan/glm-5.3, zai/glm-5.3` |
-| 12 Critics | `hyperresearch-{dialectic,depth,width,instruction}-critic` | 4, parallel | `zhipu-coding-plan/glm-5.3, zai/glm-5.3` |
-| 13 Gap fetch | `hyperresearch-fetcher` | N | `zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash` |
-| 14 Patcher | `hyperresearch-patcher` | 1 | `zhipu-coding-plan/glm-5.3, zai/glm-5.3` |
-| 14.5 Cite check | `hyperresearch-cite-checker` (+ second patcher pass) | 1–2 | `zhipu-coding-plan/glm-5.3-flash, zai/glm-5.3-flash` |
-| 15 Polish | `hyperresearch-polish-auditor` | 1 | `zhipu-coding-plan/glm-5.3, zai/glm-5.3` |
-| 16 Readability audit | `hyperresearch-readability-recommender` | 1 | `zhipu-coding-plan/glm-5.3, zai/glm-5.3` |
+| 10 Triple draft | `hyperresearch-draft-orchestrator` | 3, parallel | `zai/glm-5.3` |
+| 11 Synthesize | `hyperresearch-synthesizer` | 1 (two-pass) | `zai/glm-5.3` |
+| 12 Critics | `hyperresearch-{dialectic,depth,width,instruction}-critic` | 4, parallel | `zai/glm-5.3` |
+| 13 Gap fetch | `hyperresearch-fetcher` | N | `zai/glm-5.3-flash` |
+| 14 Patcher | `hyperresearch-patcher` | 1 | `zai/glm-5.3` |
+| 14.5 Cite check | `hyperresearch-cite-checker` (+ second patcher pass) | 1–2 | `zai/glm-5.3-flash` |
+| 15 Polish | `hyperresearch-polish-auditor` | 1 | `zai/glm-5.3` |
+| 16 Readability audit | `hyperresearch-readability-recommender` | 1 | `zai/glm-5.3` |
 
 Steps marked "orchestrator" have no subagent: the OMP session you started does that work itself, on whatever model that session is running.
 
@@ -83,8 +83,8 @@ Per vault, in `.hyperresearch/config.toml` — the table is round-tripped on eve
 
 ```toml
 [harness.models.omp]
-sonnet = "zhipu-coding-plan/glm-5.3-flash"   # the reading tier
-opus   = "zhipu-coding-plan/glm-5.3:high"    # the judgment tier, forced high thinking
+sonnet = "zai/glm-5.3-flash"   # the reading tier
+opus   = "zai/glm-5.3:high"    # the judgment tier, forced high thinking
 ```
 
 ```bash
@@ -95,12 +95,12 @@ Keys are the profile's tier aliases (`haiku`, `sonnet`, `opus`), not agent names
 
 Worth knowing before you tune:
 
-- **The cheap tier carries the comprehension load.** `hyperresearch-depth-investigator` and `hyperresearch-cite-checker` sit in the reading tier because that is where token volume lives, but both do real judgment. If reports come back with thin depth sections or sloppy citation verdicts, move that tier up: `sonnet = "zhipu-coding-plan/glm-5.3"`.
+- **The cheap tier carries the comprehension load.** `hyperresearch-depth-investigator` and `hyperresearch-cite-checker` sit in the reading tier because that is where token volume lives, but both do real judgment. If reports come back with thin depth sections or sloppy citation verdicts, move that tier up: `sonnet = "zai/glm-5.3"`.
 - **Per-agent, not per-tier, overrides belong to OMP.** `task.agentModelOverrides` in `~/.omp/agent/config.yml` (or `.omp/config.yml`) takes precedence over the frontmatter, so you can pin one agent without moving its whole tier:
   ```yaml
   task:
     agentModelOverrides:
-      hyperresearch-cite-checker: zhipu-coding-plan/glm-5.3
+      hyperresearch-cite-checker: zai/glm-5.3
   ```
 - **Role aliases work too.** `opus = "@slow"` routes through your own `modelRoles.slow`, which is the right move if you already curate roles in OMP.
 
