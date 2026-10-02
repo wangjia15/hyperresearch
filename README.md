@@ -153,7 +153,7 @@ opus = "glm-5.3"                          # pi resolves the id fuzzily
 
 An empty value omits the agent's `model:` line entirely (inherit the parent model).
 
-Per-harness detail, including the step-by-step model table: [README-OMP.md](README-OMP.md).
+Per-harness detail, including the step-by-step model table: [README-OMP.md](README-OMP.md), [README-ZCODE.md](README-ZCODE.md).
 
 #### ZCode
 
