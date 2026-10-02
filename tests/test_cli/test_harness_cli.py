@@ -106,6 +106,75 @@ class TestInstallHarnessFlag:
         }
 
 
+class TestZCodeModelResolution:
+    """zcode's provider id is per-login, so the CLI path reads it from the
+    user's own zcode config — and a vault's explicit pin always wins."""
+
+    @staticmethod
+    def _home_with_zcode(tmp_path, provider="bigmodel"):
+        cli = tmp_path / ".zcode" / "cli"
+        cli.mkdir(parents=True)
+        levels = {"enabled": True, "levels": ["low", "high"]}
+        models = {"glm-5.3": {"reasoning": levels}, "glm-5.3-flash": {"reasoning": levels}}
+        (cli / "config.json").write_text(
+            json.dumps(
+                {"model": {"main": f"{provider}/glm-5.3"}, "provider": {provider: {"models": models}}}
+            ),
+            encoding="utf-8",
+        )
+        return tmp_path
+
+    def test_autodetected_selectors_are_applied(self, tmp_path):
+        from hyperresearch.cli._harness import resolve_cli_harnesses
+
+        home = self._home_with_zcode(tmp_path)
+        (zcode,) = resolve_cli_harnesses(["zcode"], home=home)
+        assert zcode.model_line("sonnet") == "model: bigmodel/glm-5.3-flash$low"
+        assert zcode.model_line("opus") == "model: bigmodel/glm-5.3$high"
+
+    def test_without_a_zcode_config_agents_inherit(self, tmp_path):
+        from hyperresearch.cli._harness import resolve_cli_harnesses
+
+        (zcode,) = resolve_cli_harnesses(["zcode"], home=tmp_path)
+        assert zcode.model_line("opus") == ""
+
+    def test_a_vault_pin_beats_autodetection(self, tmp_path):
+        from hyperresearch.cli._harness import resolve_cli_harnesses
+
+        home = self._home_with_zcode(tmp_path / "home")
+        config_path = tmp_path / "config.toml"
+        config = VaultConfig()
+        config.harness_models = {"zcode": {"opus": "zai/glm-5.3$max"}}
+        config.save(config_path)
+
+        (zcode,) = resolve_cli_harnesses(["zcode"], config_path=config_path, home=home)
+        assert zcode.model_line("opus") == "model: zai/glm-5.3$max"
+        # An unpinned tier stays on the harness default, not on autodetection.
+        assert zcode.model_line("sonnet") == ""
+
+    def test_install_cli_writes_the_detected_selectors(self, tmp_vault, tmp_path, monkeypatch):
+        home = self._home_with_zcode(tmp_path / "home")
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.chdir(tmp_vault.root)
+        monkeypatch.setattr("hyperresearch.cli.install._setup_crawl4ai", lambda vault: "not_installed")
+
+        result = runner.invoke(app, ["install", str(tmp_vault.root), "--harness", "zcode", "--json"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.stdout)["data"]["harnesses"] == ["zcode"]
+
+        agents = tmp_vault.root / ".zcode" / "agents"
+        assert "model: bigmodel/glm-5.3$high" in (agents / "hyperresearch-patcher.md").read_text(
+            encoding="utf-8"
+        )
+        assert "model: bigmodel/glm-5.3-flash$low" in (
+            agents / "hyperresearch-fetcher.md"
+        ).read_text(encoding="utf-8")
+        assert (tmp_vault.root / "AGENTS.md").exists()
+        # The vault fixture predates this install; a zcode install adds no
+        # Claude Code config dir.
+        assert not (tmp_vault.root / ".claude").exists()
+
+
 class TestSpawnBridge:
     """The bridge's observable contract is the child invocation it builds."""
 

@@ -21,7 +21,7 @@ def repair(
         None,
         "--harness",
         "-H",
-        help="Harnesses whose context files to refresh: claude, omp, pi, or all. Default: the vault's [harness] targets, else autodetected.",
+        help="Harnesses whose context files to refresh: claude, omp, zcode, pi, or all. Default: the vault's [harness] targets, else autodetected.",
     ),
 ) -> None:
     """Repair and rebuild the vault — full sync, fix broken links, promote notes, rebuild indexes."""

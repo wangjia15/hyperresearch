@@ -22,7 +22,7 @@ def init(
         None,
         "--harness",
         "-H",
-        help="Harnesses whose context file to write: claude, omp, pi, or all. Default: autodetected.",
+        help="Harnesses whose context file to write: claude, omp, zcode, pi, or all. Default: autodetected.",
     ),
 ) -> None:
     """Initialize a new hyperresearch vault."""

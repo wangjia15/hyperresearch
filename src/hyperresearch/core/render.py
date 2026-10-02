@@ -31,6 +31,7 @@ a prompt with a hole in it.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -144,3 +145,40 @@ def compact_frontmatter(content: str) -> str:
     head, rest = content[4:end], content[end:]
     kept = [line for line in head.split("\n") if line.strip()]
     return "---\n" + "\n".join(kept) + rest
+
+
+_BLOCK_SCALAR_RE = re.compile(r"^([A-Za-z][A-Za-z0-9_-]*): *[>|][+-]?\s*$")
+
+
+def flatten_frontmatter_scalars(content: str) -> str:
+    """Collapse YAML block scalars in the leading frontmatter to single lines.
+
+    ZCode's agent-frontmatter parser reads no block scalars: `description: >`
+    yields the literal ">" and every indented continuation line is dropped.
+    `key: >` followed by its indented body becomes `key: <one-line text>`;
+    everything outside the frontmatter block is untouched.
+    """
+    match = re.match(r"^---\n(.*?\n)(---\n)(.*)$", content, re.S)
+    if not match:
+        return content
+    block, _, rest = match.groups()
+    lines = block.splitlines()
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        scalar = _BLOCK_SCALAR_RE.match(line)
+        if not scalar:
+            out.append(line)
+            i += 1
+            continue
+        key = scalar.group(1)
+        body: list[str] = []
+        i += 1
+        while i < len(lines) and (not lines[i].strip() or lines[i].startswith((" ", "\t"))):
+            if lines[i].strip():
+                body.append(lines[i].strip())
+            i += 1
+        out.append(f"{key}: {' '.join(body)}" if body else f"{key}: ")
+    flattened = "".join(f"{line}\n" for line in out)
+    return f"---\n{flattened}---\n{rest}"

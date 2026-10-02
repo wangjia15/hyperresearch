@@ -5,6 +5,8 @@ installs it into whichever agent harness the user actually runs:
 
     claude  Claude Code   `.claude/`      native Task subagents, `Skill` tool
     omp     Oh My Pi      `.omp/`         native `task` subagents, `skill://`
+    zcode   ZCode         `.zcode/`       native Task subagents, `Skill` tool,
+                                           GLM models behind `zai/<model>`
     pi      Pi            `.pi/`          no subagent tool — `hpr spawn` bridge
 
 Only four things differ between harnesses, and all four reach the prompts:
@@ -110,6 +112,11 @@ class Harness:
     # Subdirectory names under the config dir.
     skills_dirname: str = "skills"
     agents_dirname: str = "agents"
+    # The harness's agent-frontmatter parser reads no YAML block scalars:
+    # `description: >` collapses to the literal ">" and the indented body is
+    # dropped. Harnesses that ask for it get every frontmatter block scalar
+    # flattened to a single line in installed agent files.
+    flat_frontmatter: bool = False
 
     # -- paths --------------------------------------------------------------
 
@@ -313,6 +320,63 @@ OMP = Harness(
 )
 
 # ---------------------------------------------------------------------------
+# ZCode — Z.ai's coding agent harness. Claude-compatible surfaces (Task tool
+# with `subagent_type`, Skill tool, same capitalized file-tool names) but its
+# own layout: `.zcode/` project config, `~/.zcode/` user root, hooks in
+# `.zcode/config.json` under `hooks.events.*` behind `hooks.enabled: true`.
+# Models are Z.AI's GLM ids behind a required `provider/model` selector.
+# ---------------------------------------------------------------------------
+ZCODE = Harness(
+    id="zcode",
+    label="ZCode",
+    config_dir=".zcode",
+    global_segments=(".zcode",),
+    context_file="AGENTS.md",
+    tool_names={
+        "bash": "Bash",
+        "read": "Read",
+        "write": "Write",
+        "edit": "Edit",
+        "glob": "Glob",
+        "grep": "Grep",
+        "task": "Task",
+        "web_search": "WebSearch",
+        "skill": "Skill",
+        "todo": "TodoWrite",
+        # No on-demand MCP tool loader; plugins load at session start.
+        "tool_search": None,
+        # The browser-use plugin drives the browser from the main agent
+        # only, not from spawned subagents — no browser lane here.
+        "browser": None,
+    },
+    # Agent `model:` selectors are `providerId/modelId`, and the provider id
+    # depends on which coding plan the user logged into (`zai` vs `bigmodel`
+    # — both ship the same built-in GLM ids). Static default: no selector,
+    # agents inherit the session model. `detect_zcode_model_aliases()` reads
+    # zcode's own `~/.zcode/cli/config.json` at install time and fills the
+    # real `<provider>/glm-5.3[-flash]` pair; a vault's
+    # `[harness.models.zcode]` beats both. WebSearch itself is served by
+    # zcode's own backend (gemini-2.5-flash Google Search grounding once
+    # `webSearch.provider = "gemini"` is configured).
+    model_aliases={"haiku": "", "sonnet": "", "opus": ""},
+    spawn_key="subagent_type",
+    spawn_mode="task-tool",
+    spawn_syntax='Task(subagent_type: "<agent>", prompt: "<the block below>")',
+    parallel_note=(
+        "Spawn a wave by issuing N Task calls in ONE message — they run "
+        "concurrently. Sequential messages run serially and waste wall time."
+    ),
+    skill_load='Skill(skill: "{name}")',
+    invoke_command="/skill hyperresearch",
+    # No subagent browser surface: blocked fetches stay queued as
+    # escalations, drained by the human.
+    browser_lane=None,
+    reminder_hook="zcode-config",
+    # zcode's loose agent-frontmatter parser drops `description: >` bodies.
+    flat_frontmatter=True,
+)
+
+# ---------------------------------------------------------------------------
 # Pi — skills and context files, but no subagent tool and no web tools. The
 # pipeline's parallelism comes from `hpr spawn`, which runs each agent as a
 # `pi -p` child process with the installed agent prompt as its system prompt.
@@ -361,7 +425,67 @@ PI = Harness(
     reminder_hook="none",
 )
 
-HARNESSES: dict[str, Harness] = {h.id: h for h in (CLAUDE, OMP, PI)}
+def detect_zcode_model_aliases(home: Path | None = None) -> dict[str, str]:
+    """Model aliases for this machine's zcode login, from zcode's own config.
+
+    zcode agent `model:` selectors must be `providerId/modelId`, and the
+    provider id names the coding plan the user logged into (`zai` vs
+    `bigmodel` — both expose the same built-in GLM ids). `~/.zcode/cli/
+    config.json` records the active default as `model.main =
+    "<provider>/<model>"`, and the provider block lists its models with the
+    exact casing the registry expects — read both, return the GLM-5.3 /
+    GLM-5.3-Flash pair under the live provider. Anything unreadable or
+    missing returns {} and the harness keeps its inherit-the-parent-model
+    default, which never breaks a spawn.
+    """
+    import json
+
+    base = Path.home() if home is None else home
+    try:
+        config = json.loads(
+            (base / ".zcode" / "cli" / "config.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(config, dict):
+        return {}
+
+    main = config.get("model", {}).get("main") if isinstance(config.get("model"), dict) else None
+    if not isinstance(main, str) or "/" not in main:
+        return {}
+    provider_id = main.split("/", 1)[0]
+
+    provider = config.get("provider", {}).get(provider_id)
+    models = provider.get("models", {}) if isinstance(provider, dict) else None
+    if not isinstance(models, dict):
+        return {}
+    by_lower = {str(mid).lower(): str(mid) for mid in models}
+    flash = by_lower.get("glm-5.3-flash")
+    full = by_lower.get("glm-5.3")
+    if not flash or not full:
+        return {}
+
+    def selector(model_id: str, level: str) -> str:
+        """`provider/model$level` — the registry requires an explicit
+        reasoning level for reasoning-capable models, and GLM-5.3[-Flash]
+        both are. Only suffix a level the model actually offers."""
+        entry = models.get(model_id)
+        reasoning = entry.get("reasoning") if isinstance(entry, dict) else None
+        if isinstance(reasoning, dict) and reasoning.get("enabled"):
+            levels = [str(v).lower() for v in reasoning.get("levels", [])]
+            if level not in levels:
+                return f"{provider_id}/{model_id}"
+            return f"{provider_id}/{model_id}${level}"
+        return f"{provider_id}/{model_id}"
+
+    return {
+        "haiku": selector(flash, "low"),
+        "sonnet": selector(flash, "low"),
+        "opus": selector(full, "high"),
+    }
+
+
+HARNESSES: dict[str, Harness] = {h.id: h for h in (CLAUDE, OMP, ZCODE, PI)}
 DEFAULT_HARNESS_ID = CLAUDE.id
 
 
@@ -417,6 +541,10 @@ def detect_harness_ids(
     env_markers: dict[str, tuple[str, ...]] = {
         "claude": ("CLAUDE_PROJECT_DIR", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"),
         "omp": ("OMP_PROFILE", "OMP_SESSION_ID", "OMP_AGENT_ID"),
+        # ZCODE_RUNTIME_ENV is set in every zcode agent process (observed
+        # live in a session's Bash tool); the other two cover the desktop
+        # runtime's agent processes.
+        "zcode": ("ZCODE_RUNTIME_ENV", "ZCODE_PROCESS_LABEL", "ZCODE_ENV"),
         "pi": ("PI_CODING_AGENT_DIR", "PI_PROFILE", "PI_SESSION_ID"),
     }
 

@@ -16,7 +16,7 @@
 
 ---
 
-**Hyperresearch turns your coding agent into a deep research agent: one that currently leads the DeepResearch-Bench RACE leaderboard (benchmarked internally). It runs in OpenAI Codex too.** A tier-adaptive 16-step pipeline takes one prompt and produces an adversarially-audited report with full source provenance. Every source it reads lands in a persistent, searchable vault, so each session starts smarter than the last. Runs on Claude Code, OMP, and Pi.
+**Hyperresearch turns your coding agent into a deep research agent: one that currently leads the DeepResearch-Bench RACE leaderboard (benchmarked internally). It runs in OpenAI Codex too.** A tier-adaptive 16-step pipeline takes one prompt and produces an adversarially-audited report with full source provenance. Every source it reads lands in a persistent, searchable vault, so each session starts smarter than the last. Runs on Claude Code, OMP, ZCode, and Pi.
 
 **Don't want to run it locally?** [Hyperresearch](https://hyperresearch.ai/?utm_source=github&utm_medium=readme) is the hosted version: the same pipeline, with no Claude Code or Codex install needed.
 
@@ -53,7 +53,7 @@ manuscript version with [scholarly metadata filters](docs/source-search.md).
 
 ## Install
 
-Works in **Claude Code**, **OMP**, **Pi** and **OpenAI Codex**: same pipeline, same vault.
+Works in **Claude Code**, **OMP**, **ZCode**, **Pi** and **OpenAI Codex**: same pipeline, same vault.
 
 From PyPI (released versions):
 
@@ -65,7 +65,7 @@ hyperresearch install                    # Claude Code, then: /hyperresearch <an
 hyperresearch install . --target codex   # OpenAI Codex, then: $hyperresearch <anything>
 ```
 
-Then `/hyperresearch <anything>` in Claude Code (`/skill:hyperresearch <anything>` on OMP and Pi).
+Then `/hyperresearch <anything>` in Claude Code (`/skill:hyperresearch <anything>` on OMP and Pi, `/skill hyperresearch <anything>` on ZCode).
 
 `--target all` installs both side by side. Codex sessions need write access and network, [see below](#codex).
 
@@ -112,11 +112,12 @@ The installed skills embed the absolute path of the CLI they were rendered with,
 |---|---|---|---|---|
 | Claude Code | `.claude/{skills,agents}`, `CLAUDE.md` | `/hyperresearch` | `Task` tool | Full feature set: Chrome escalation lane, `WebSearch`, `TodoWrite`, PreToolUse reminder hook |
 | OMP | `.omp/{skills,agents}`, `AGENTS.md` | `/skill:hyperresearch` | `task` tool | Chrome lane via the `eval` tool's relay browser; reminder ships as `.omp/extensions/hyperresearch/index.ts` |
+| ZCode | `.zcode/{skills,agents}`, `AGENTS.md` | `/skill hyperresearch` | `Task` tool | `WebSearch` and `TodoWrite`; reminder is a PreToolUse entry in `.zcode/config.json`; no browser lane — blocked fetches stay queued as escalations |
 | Pi | `.pi/{skills,agents}`, `AGENTS.md` | `/skill:hyperresearch` | `hyperresearch spawn` | No web-search tool, no todo tool, no browser lane — blocked fetches stay queued as escalations |
 
 ```bash
 hyperresearch install --harness omp          # one harness
-hyperresearch install --harness claude,pi    # several
+hyperresearch install --harness claude,zcode  # several
 hyperresearch install --harness all --global # every harness, user level
 ```
 
@@ -133,10 +134,10 @@ Each spawn runs `pi -p` with the installed agent file as its system prompt (`HPR
 
 The profile's ModelMap assigns every agent a tier; the harness turns a tier into a selector it can actually resolve.
 
-| Tier | Steps | Claude Code | OMP | Pi |
-|---|---|---|---|---|
-| reading volume | fetcher, source-analyst, loci-analyst, depth-investigator, corpus-critic, cite-checker, browser-fetcher | `sonnet` | `zai/glm-5.3-flash` | inherits the child's model |
-| judgment | draft-orchestrators, synthesizer, 4 critics, patcher, polish-auditor, readability-recommender | `opus` | `zai/glm-5.3` | inherits the child's model |
+| Tier | Steps | Claude Code | OMP | ZCode | Pi |
+|---|---|---|---|---|---|
+| reading volume | fetcher, source-analyst, loci-analyst, depth-investigator, corpus-critic, cite-checker, browser-fetcher | `sonnet` | `zai/glm-5.3-flash` | `<provider>/glm-5.3-flash$low`, detected | inherits the child's model |
+| judgment | draft-orchestrators, synthesizer, 4 critics, patcher, polish-auditor, readability-recommender | `opus` | `zai/glm-5.3` | `<provider>/glm-5.3$high`, detected | inherits the child's model |
 
 OMP selectors may be comma-separated fallback chains: OMP tries each entry in order and drops back to the parent session's model if none resolves, so a machine without the credential degrades instead of failing the spawn. The shipped defaults are single `zai` selectors. Pin your own per vault:
 
@@ -153,6 +154,24 @@ opus = "glm-5.3"                          # pi resolves the id fuzzily
 An empty value omits the agent's `model:` line entirely (inherit the parent model).
 
 Per-harness detail, including the step-by-step model table: [README-OMP.md](README-OMP.md).
+
+#### ZCode
+
+ZCode agent files need a `provider/model` selector, and the provider id is whichever coding plan you logged into (`bigmodel`, `zai`, …). So the shipped default names no provider: the install reads your own `~/.zcode/cli/config.json` (`model.main` gives the provider id, the provider block gives the exact model-id casing) and writes `<provider>/glm-5.3-flash$low` for the reading tiers and `<provider>/glm-5.3$high` for judgment. The `$level` suffix is required — the model registry rejects a reasoning-capable model with no level. Both GLM-5.3 ids are zcode's built-in models. When the config is missing, unreadable, or the provider lacks either model, the agents inherit the session model rather than failing the spawn. Pin per vault, which beats detection:
+
+```toml
+[harness.models.zcode]
+sonnet = "bigmodel/glm-5.3-flash$low"
+opus = "bigmodel/glm-5.3$high"
+```
+
+Web search is zcode's own `WebSearch` tool. To run it on `gemini-2.5-flash` (Google Search grounding) instead of the active model's native search, set it once in `~/.zcode/cli/config.json` — user scope only, workspace configs cannot set it:
+
+```json
+{ "webSearch": { "provider": "gemini", "gemini": { "model": "gemini-2.5-flash" } } }
+```
+
+The key comes from `GEMINI_API_KEY` / `GOOGLE_API_KEY` (or `webSearch.gemini.apiKey`). This is a zcode setting, not something `hyperresearch install` writes. ZCode's agent-frontmatter parser reads no YAML block scalars, so installed agent files carry single-line `description:` values (skills keep theirs — the skill parser accepts them), and config-file hooks only run with `hooks.enabled: true`, which the install sets in `.zcode/config.json`.
 
 ### The bootstrap skill
 
@@ -202,7 +221,7 @@ What is different on Codex:
 
 ## The 16-step research pipeline
 
-The entry skill is a thin router. It pins down the canonical research query, then loads one step skill per phase (the `Skill` tool on Claude Code, `skill://` on OMP, a file read on Pi; on Codex, it reads one step file per phase from `.hyperresearch/codex/steps/`). Each step's procedure loads into context only when that step actually runs. That's what stops a long pipeline from quietly dropping steps as its context rots.
+The entry skill is a thin router. It pins down the canonical research query, then loads one step skill per phase (the `Skill` tool on Claude Code and ZCode, `skill://` on OMP, a file read on Pi; on Codex, it reads one step file per phase from `.hyperresearch/codex/steps/`). Each step's procedure loads into context only when that step actually runs. That's what stops a long pipeline from quietly dropping steps as its context rots.
 
 | # | Step | What it does | Tiers |
 |---|---|---|---|
@@ -528,7 +547,7 @@ Publishers block their own open-access PDFs often enough that one attempt isn't 
 ## Requirements
 
 - Python 3.11+
-- One of: [Claude Code](https://claude.com/claude-code), [OMP](https://github.com/can1357/oh-my-pi), [Pi](https://github.com/badlogic/pi-mono), or the [OpenAI Codex CLI](https://github.com/openai/codex)
+- One of: [Claude Code](https://claude.com/claude-code), [OMP](https://github.com/can1357/oh-my-pi), [ZCode](https://github.com/wangjia15/ZCode), [Pi](https://github.com/badlogic/pi-mono), or the [OpenAI Codex CLI](https://github.com/openai/codex)
 
 ---
 

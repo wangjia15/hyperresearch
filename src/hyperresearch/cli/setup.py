@@ -22,7 +22,7 @@ def setup(
         None,
         "--harness",
         "-H",
-        help="Harnesses to install into: claude, omp, pi, or all (repeatable, comma-separated ok). Default: autodetected.",
+        help="Harnesses to install into: claude, omp, zcode, pi, or all (repeatable, comma-separated ok). Default: autodetected.",
     ),
 ) -> None:
     """Interactive setup — configure hyperresearch step by step."""

@@ -128,7 +128,7 @@ def config_agent_docs(
         None,
         "--harness",
         "-H",
-        help="Harnesses whose context files to refresh: claude, omp, pi, or all. Default: the vault's [harness] targets, else autodetected.",
+        help="Harnesses whose context files to refresh: claude, omp, zcode, pi, or all. Default: the vault's [harness] targets, else autodetected.",
     ),
 ) -> None:
     """Refresh each harness's context file (CLAUDE.md / AGENTS.md) with the latest blurb."""

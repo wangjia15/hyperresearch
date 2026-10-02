@@ -1,16 +1,18 @@
 """Agent installer — installs the skills, subagents, and web-reminder hook.
 
 hyperresearch installs the same pipeline into every harness it supports
-(Claude Code, OMP, Pi — see core/harnesses.py). Per harness this module
-writes:
+(Claude Code, OMP, ZCode, Pi — see core/harnesses.py). Per harness this
+module writes:
 
   - the entry skill (the `/hyperresearch` router) and the 18 step skills
     into the harness's skills dir
   - the subagent prompts into the harness's agents dir, with tool names and
-    model selectors rendered for that harness
+    model selectors rendered for that harness (ZCode's agent files carry
+    single-line frontmatter scalars — its parser drops block scalars)
   - a reminder that fires before raw web searches: a PreToolUse hook in
     `.claude/settings.json` on Claude Code, an extension module under
-    `<config>/extensions/` on OMP, nothing on Pi (it has no web tool)
+    `<config>/extensions/` on OMP, a PreToolUse entry in
+    `.zcode/config.json` on ZCode, nothing on Pi (it has no web tool)
 
 Everything is rendered from one set of templates; `h` in a template is the
 target harness. Claude Code rendering is the reference and is pinned
@@ -3862,7 +3864,7 @@ def install_global_hooks(
     """Install the entry skill + agents at user level, for every harness.
 
     Destinations are the harnesses' own user-level roots: `~/.claude/`,
-    `~/.omp/agent/`, `~/.pi/agent/`. `platform="codex"` installs to
+    `~/.omp/agent/`, `~/.zcode/`, `~/.pi/agent/`. `platform="codex"` installs to
     `~/.agents/skills/hyperresearch/` + `~/.codex/agents/` instead. The
     Codex install never touches ~/.codex/config.toml or ~/.codex/hooks.json —
     global agent-tool config belongs to the user; the Stop hook is
@@ -4017,14 +4019,17 @@ def _install_reminder_hook(vault_root: Path, hpr_path: str) -> str | None:
     """Install the "check the vault before searching the web" reminder.
 
     The lane is the harness's: a PreToolUse hook on Claude Code, an extension
-    module on OMP. Pi has no web tool to intercept, so it gets nothing — the
-    same instruction reaches it through the project context file.
+    module on OMP, a config-file hook on ZCode. Pi has no web tool to
+    intercept, so it gets nothing — the same instruction reaches it through
+    the project context file.
     """
     harness = _active_harness()
     if harness.reminder_hook == "claude-settings":
         return _install_claude_settings_hook(vault_root, hpr_path, harness)
     if harness.reminder_hook == "extension":
         return _install_extension_hook(vault_root, hpr_path, harness)
+    if harness.reminder_hook == "zcode-config":
+        return _install_zcode_config_hook(vault_root, hpr_path, harness)
     return None
 
 
@@ -4093,6 +4098,56 @@ def _install_extension_hook(
     ext_path.write_text(content, encoding="utf-8")
     return f"{harness.label}: {_rel(ext_path, vault_root)} (web_search reminder)"
 
+def _install_zcode_config_hook(
+    vault_root: Path,
+    hpr_path: str,
+    harness: Harness,
+) -> str | None:
+    """Install the PreToolUse hook into `.zcode/config.json`.
+
+    ZCode config-file hooks live under `hooks.events.<Event>` and are
+    disabled unless `hooks.enabled` is true, so the installer sets both. The
+    command runs the same `hook.js` script the Claude Code lane uses —
+    ZCode's hook output schema (hookSpecificOutput.additionalContext JSON on
+    stdout) is the same shape.
+    """
+    hook_path = _write_hook_script(vault_root, hpr_path)
+
+    config_dir = vault_root / harness.config_dir
+    config_dir.mkdir(exist_ok=True)
+    config_path = config_dir / "config.json"
+
+    config = {}
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    hooks_config = config.setdefault("hooks", {})
+    hooks_config["enabled"] = True
+    events = hooks_config.setdefault("events", {})
+    pre_tool = events.setdefault("PreToolUse", [])
+
+    for entry in pre_tool:
+        if isinstance(entry, dict):
+            for h in entry.get("hooks", []):
+                if "hyperresearch" in h.get("command", ""):
+                    return None
+
+    pre_tool.append({
+        # Case-sensitive regex on the tool name; zcode names the tools the
+        # same way Claude Code does.
+        "matcher": "WebSearch|WebFetch",
+        "hooks": [{
+            "type": "command",
+            "command": f'node "{hook_path.as_posix()}"',
+        }],
+    })
+
+    config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    return f"{harness.label}: {harness.config_dir}/config.json (PreToolUse hook)"
+
 
 def _write_agent_file(
     vault_root: Path,
@@ -4114,6 +4169,12 @@ def _write_agent_file(
     agent_path = agents_dir / filename
 
     content = _render_installed(content)
+    if _active_harness().flat_frontmatter:
+        # zcode's loose agent-frontmatter parser drops `description: >`
+        # bodies; installed agent files must carry single-line scalars.
+        from hyperresearch.core.render import flatten_frontmatter_scalars
+
+        content = flatten_frontmatter_scalars(content)
 
     if agent_path.exists():
         existing = agent_path.read_text(encoding="utf-8")

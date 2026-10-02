@@ -59,7 +59,27 @@ def resolve_cli_harnesses(
             console.print(f"[red]Error:[/] {exc}")
         raise typer.Exit(1)
 
-    return tuple(h.with_models(model_overrides.get(h.id)) for h in resolved)
+    return tuple(_apply_model_overrides(h, model_overrides, home) for h in resolved)
+
+
+def _apply_model_overrides(
+    harness: Harness, overrides: dict, home: Path | None
+) -> Harness:
+    """Pin a harness's model selectors: vault config, else what the target
+    harness itself can tell us.
+
+    zcode's provider id names the coding plan the user logged into, so its
+    aliases are autodetected from `~/.zcode/cli/config.json` unless the vault
+    pins them; the other harnesses ship stable selectors and only take
+    explicit overrides.
+    """
+    pinned = overrides.get(harness.id)
+    if harness.id == "zcode" and not pinned:
+        from hyperresearch.core.harnesses import detect_zcode_model_aliases
+
+        detected = detect_zcode_model_aliases(home)
+        return harness.with_models(detected) if detected else harness
+    return harness.with_models(pinned)
 
 
 def persist_harness_targets(

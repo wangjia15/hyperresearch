@@ -15,6 +15,7 @@ from hyperresearch.core.harnesses import (
     CLAUDE,
     HarnessError,
     detect_harness_ids,
+    detect_zcode_model_aliases,
     get_harness,
     parse_harness_ids,
     resolve_harnesses,
@@ -28,6 +29,7 @@ from hyperresearch.core.render import build_render_context, render_prompt
 
 OMP = get_harness("omp")
 PI = get_harness("pi")
+ZCODE = get_harness("zcode")
 
 
 class TestToolVocabulary:
@@ -96,7 +98,7 @@ class TestSelection:
         assert parse_harness_ids(["claude,omp", "pi"]) == ("claude", "omp", "pi")
 
     def test_all_expands_and_dedupes(self):
-        assert parse_harness_ids(["all", "omp"]) == ("claude", "omp", "pi")
+        assert parse_harness_ids(["all", "omp"]) == ("claude", "omp", "zcode", "pi")
 
     def test_unknown_id_names_the_valid_set(self):
         with pytest.raises(HarnessError) as exc:
@@ -269,3 +271,249 @@ class TestContextFiles:
         assert "keep me" in body
         assert "hyperresearch:start" in body
         assert inject_agent_docs(tmp_path, [OMP]) == []
+
+
+class TestZCode:
+    """ZCode is Claude-shaped (Task/Skill tools) with its own layout, a
+    selector grammar that needs `provider/model$level`, and a frontmatter
+    parser that cannot read YAML block scalars."""
+
+    def test_tool_vocabulary_is_capitalized_like_claude_minus_what_it_lacks(self):
+        assert ZCODE.tools("bash", "read", "write", "web_search") == "Bash, Read, Write, WebSearch"
+        assert ZCODE.tool("task") == "Task"
+        # No on-demand tool loader and no subagent-reachable browser.
+        assert not ZCODE.supports("tool_search")
+        assert not ZCODE.supports("browser")
+        assert ZCODE.browser_lane is None
+
+    def test_spawns_and_loads_skills_through_native_tools(self):
+        assert ZCODE.has_subagents
+        assert ZCODE.spawn_block_intro("hyperresearch-fetcher") == (
+            "subagent_type: hyperresearch-fetcher"
+        )
+        assert ZCODE.load_skill("hyperresearch-2-width-sweep") == (
+            'Skill(skill: "hyperresearch-2-width-sweep")'
+        )
+
+    def test_default_inherits_the_session_model(self):
+        # The provider id depends on the user's login, so the static
+        # default must not name one: an unresolvable selector fails the spawn.
+        for alias in ("haiku", "sonnet", "opus"):
+            assert ZCODE.model_line(alias) == ""
+
+    def test_layout_paths(self, tmp_path):
+        assert ZCODE.skills_rel == ".zcode/skills"
+        assert ZCODE.agents_dir(tmp_path) == tmp_path / ".zcode" / "agents"
+        assert ZCODE.global_agents_dir(tmp_path) == tmp_path / ".zcode" / "agents"
+        assert ZCODE.context_file == "AGENTS.md"
+
+    def test_detected_from_the_environment_and_project_dir(self, tmp_path):
+        assert detect_harness_ids(
+            root=tmp_path, home=tmp_path, env={"ZCODE_RUNTIME_ENV": "cli"}
+        ) == ("zcode",)
+        (tmp_path / ".zcode").mkdir()
+        assert detect_harness_ids(root=tmp_path, home=tmp_path / "nohome", env={}) == ("zcode",)
+
+
+def _zcode_home(tmp_path, config: dict | str | None):
+    cli = tmp_path / ".zcode" / "cli"
+    cli.mkdir(parents=True)
+    if config is not None:
+        import json
+
+        text = config if isinstance(config, str) else json.dumps(config)
+        (cli / "config.json").write_text(text, encoding="utf-8")
+    return tmp_path
+
+
+def _glm_provider(**overrides):
+    levels = {"enabled": True, "levels": ["low", "max", "high"]}
+    provider = {
+        "models": {
+            "glm-5.2": {"reasoning": levels},
+            "glm-5.3": {"reasoning": levels},
+            "glm-5.3-flash": {"reasoning": levels},
+        }
+    }
+    provider.update(overrides)
+    return provider
+
+
+class TestZCodeModelDetection:
+    def test_selectors_come_from_the_provider_the_user_is_logged_into(self, tmp_path):
+        home = _zcode_home(
+            tmp_path,
+            {
+                "model": {"main": "bigmodel/glm-5.2"},
+                "provider": {"zai": _glm_provider(), "bigmodel": _glm_provider()},
+            },
+        )
+        assert detect_zcode_model_aliases(home) == {
+            "haiku": "bigmodel/glm-5.3-flash$low",
+            "sonnet": "bigmodel/glm-5.3-flash$low",
+            "opus": "bigmodel/glm-5.3$high",
+        }
+
+    def test_a_different_login_yields_a_different_provider_prefix(self, tmp_path):
+        home = _zcode_home(
+            tmp_path,
+            {"model": {"main": "zai/glm-5.3"}, "provider": {"zai": _glm_provider()}},
+        )
+        assert detect_zcode_model_aliases(home)["opus"] == "zai/glm-5.3$high"
+
+    def test_model_id_casing_follows_the_registry(self, tmp_path):
+        models = {
+            "GLM-5.3": {"reasoning": {"enabled": True, "levels": ["high"]}},
+            "GLM-5.3-Flash": {"reasoning": {"enabled": True, "levels": ["low"]}},
+        }
+        home = _zcode_home(
+            tmp_path,
+            {"model": {"main": "p/x"}, "provider": {"p": {"models": models}}},
+        )
+        aliases = detect_zcode_model_aliases(home)
+        assert aliases["opus"] == "p/GLM-5.3$high"
+        assert aliases["haiku"] == "p/GLM-5.3-Flash$low"
+
+    def test_a_level_the_model_does_not_offer_is_not_suffixed(self, tmp_path):
+        # "reasoning-level-not-supported" fails the spawn just like a missing one.
+        provider = {
+            "models": {
+                "glm-5.3": {"reasoning": {"enabled": True, "levels": ["low", "max"]}},
+                "glm-5.3-flash": {"reasoning": {"enabled": True, "levels": ["max"]}},
+            }
+        }
+        home = _zcode_home(
+            tmp_path, {"model": {"main": "p/x"}, "provider": {"p": provider}}
+        )
+        aliases = detect_zcode_model_aliases(home)
+        assert aliases["opus"] == "p/glm-5.3"
+        assert aliases["haiku"] == "p/glm-5.3-flash"
+
+    def test_a_model_without_reasoning_gets_a_plain_selector(self, tmp_path):
+        provider = {"models": {"glm-5.3": {}, "glm-5.3-flash": {}}}
+        home = _zcode_home(
+            tmp_path, {"model": {"main": "p/x"}, "provider": {"p": provider}}
+        )
+        assert detect_zcode_model_aliases(home)["sonnet"] == "p/glm-5.3-flash"
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            None,  # no config file at all
+            "{not json",
+            "[]",
+            {},
+            {"model": {"main": "no-slash"}},
+            {"model": {"main": "ghost/glm-5.2"}, "provider": {}},
+            # The live provider lacks one of the two tiers.
+            {
+                "model": {"main": "p/x"},
+                "provider": {"p": {"models": {"glm-5.3": {}}}},
+            },
+        ],
+    )
+    def test_anything_unreadable_falls_back_to_inheriting(self, tmp_path, config):
+        home = _zcode_home(tmp_path, config)
+        assert detect_zcode_model_aliases(home) == {}
+
+
+class TestZCodeInstall:
+    def test_layout_agents_and_no_browser_fetcher(self, tmp_vault):
+        install_hooks(tmp_vault.root, "hpr", harnesses=["zcode"])
+
+        assert (tmp_vault.root / ".zcode" / "skills" / "hyperresearch" / "SKILL.md").exists()
+        assert (
+            tmp_vault.root / ".zcode" / "skills" / "hyperresearch-1-decompose" / "SKILL.md"
+        ).exists()
+        agents = tmp_vault.root / ".zcode" / "agents"
+        assert (agents / "hyperresearch-fetcher.md").exists()
+        # No subagent-reachable browser: escalations stay queued.
+        assert not (agents / "hyperresearch-browser-fetcher.md").exists()
+        assert not (tmp_vault.root / ".claude").exists()
+
+    def test_agent_frontmatter_is_readable_by_zcodes_loose_parser(self, tmp_vault):
+        install_hooks(tmp_vault.root, "hpr", harnesses=["zcode"])
+
+        for agent in (tmp_vault.root / ".zcode" / "agents").glob("hyperresearch-*.md"):
+            text = agent.read_text(encoding="utf-8")
+            frontmatter = text.split("---\n")[1]
+            # A block scalar would collapse to the literal ">" in zcode.
+            assert not any(
+                line.rstrip().endswith((": >", ": |", ": >-", ": |-"))
+                for line in frontmatter.splitlines()
+            ), agent.name
+            description = next(
+                line for line in frontmatter.splitlines() if line.startswith("description: ")
+            )
+            assert len(description) > len("description: ") + 40, agent.name
+
+    def test_skills_keep_their_block_scalar_description(self, tmp_vault):
+        # zcode's skill parser reads `>` blocks; only agents need flattening.
+        install_hooks(tmp_vault.root, "hpr", harnesses=["zcode"])
+        entry = (
+            tmp_vault.root / ".zcode" / "skills" / "hyperresearch" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        assert "\ndescription: >\n" in entry
+
+    def test_agents_name_zcodes_own_tools(self, tmp_vault):
+        install_hooks(tmp_vault.root, "hpr", harnesses=["zcode"])
+        fetcher = (
+            tmp_vault.root / ".zcode" / "agents" / "hyperresearch-fetcher.md"
+        ).read_text(encoding="utf-8")
+        assert "tools: Bash, Read, Write, WebSearch" in fetcher
+        # The default carries no provider guess — agents inherit the session model.
+        assert "\nmodel:" not in fetcher
+
+    def test_reminder_hook_lands_in_zcode_config_and_enables_hooks(self, tmp_vault):
+        import json
+
+        install_hooks(tmp_vault.root, "hpr", harnesses=["zcode"])
+        config = json.loads(
+            (tmp_vault.root / ".zcode" / "config.json").read_text(encoding="utf-8")
+        )
+        # Config-file hooks are off unless enabled is true.
+        assert config["hooks"]["enabled"] is True
+        (entry,) = config["hooks"]["events"]["PreToolUse"]
+        assert entry["matcher"] == "WebSearch|WebFetch"
+        assert (tmp_vault.root / ".hyperresearch" / "hook.js").exists()
+
+    def test_reminder_hook_merges_into_existing_config_idempotently(self, tmp_vault):
+        import json
+
+        zcode_dir = tmp_vault.root / ".zcode"
+        zcode_dir.mkdir()
+        (zcode_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "webSearch": {"provider": "gemini"},
+                    "hooks": {
+                        "events": {
+                            "PreToolUse": [
+                                {"matcher": "Bash", "hooks": [{"type": "command", "command": "x"}]}
+                            ]
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        install_hooks(tmp_vault.root, "hpr", harnesses=["zcode"])
+        install_hooks(tmp_vault.root, "hpr", harnesses=["zcode"])
+
+        config = json.loads((zcode_dir / "config.json").read_text(encoding="utf-8"))
+        assert config["webSearch"] == {"provider": "gemini"}
+        matchers = [e["matcher"] for e in config["hooks"]["events"]["PreToolUse"]]
+        assert matchers == ["Bash", "WebSearch|WebFetch"]
+
+    def test_vault_pinned_selectors_reach_the_agents(self, tmp_vault):
+        zcode = ZCODE.with_models({"opus": "bigmodel/glm-5.3$high"})
+        install_hooks(tmp_vault.root, "hpr", harnesses=[zcode])
+        patcher = (
+            tmp_vault.root / ".zcode" / "agents" / "hyperresearch-patcher.md"
+        ).read_text(encoding="utf-8")
+        assert "model: bigmodel/glm-5.3$high" in patcher
+
+    def test_global_install_lands_in_the_user_root(self, tmp_path):
+        install_global_hooks(tmp_path, "hpr", harnesses=["zcode"])
+        assert (tmp_path / ".zcode" / "skills" / "hyperresearch" / "SKILL.md").exists()
+        assert (tmp_path / ".zcode" / "agents" / "hyperresearch-fetcher.md").exists()

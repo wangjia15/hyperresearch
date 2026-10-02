@@ -7,6 +7,7 @@ from jinja2 import UndefinedError
 
 from hyperresearch.core.render import (
     build_render_context,
+    flatten_frontmatter_scalars,
     insert_after_frontmatter,
     render_header,
     render_prompt,
@@ -75,3 +76,35 @@ class TestHeaderInsertion:
         h = render_header("dissertation", "9.9.9")
         assert "dissertation" in h and "9.9.9" in h
         assert h.startswith("<!--") and h.endswith("-->")
+
+
+class TestFlattenFrontmatterScalars:
+    """ZCode's agent parser drops block-scalar bodies; flattening must keep
+    the text, leave everything else byte-identical, and never touch the body."""
+
+    def test_folded_description_becomes_one_line(self):
+        src = "---\nname: x\ndescription: >\n  first part\n  second part\nmodel: m\n---\nBody\n"
+        assert flatten_frontmatter_scalars(src) == (
+            "---\nname: x\ndescription: first part second part\nmodel: m\n---\nBody\n"
+        )
+
+    def test_literal_and_chomped_variants(self):
+        src = "---\ndescription: |-\n  a\n  b\n---\nBody\n"
+        assert flatten_frontmatter_scalars(src) == "---\ndescription: a b\n---\nBody\n"
+
+    def test_every_block_scalar_in_the_block_is_flattened(self):
+        src = "---\ndescription: >\n  one\n  two\nwhen_to_use: >\n  three\n---\nBody\n"
+        assert flatten_frontmatter_scalars(src) == (
+            "---\ndescription: one two\nwhen_to_use: three\n---\nBody\n"
+        )
+
+    def test_plain_scalars_and_lists_are_untouched(self):
+        src = "---\nname: x\ntools: Bash, Read\ncolor: blue\n---\nBody\n"
+        assert flatten_frontmatter_scalars(src) == src
+
+    def test_a_body_that_looks_like_a_block_scalar_is_untouched(self):
+        src = "---\nname: x\n---\ndescription: >\n  not frontmatter\n"
+        assert flatten_frontmatter_scalars(src) == src
+
+    def test_no_frontmatter_is_returned_as_is(self):
+        assert flatten_frontmatter_scalars("# Just a body\n") == "# Just a body\n"

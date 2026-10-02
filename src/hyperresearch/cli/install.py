@@ -23,7 +23,7 @@ def install(
         False,
         "--global",
         "-g",
-        help="Install the entry skill + agents into each harness's user-level dir (~/.claude/, ~/.omp/agent/, ~/.pi/agent/) so the pipeline is available in every session anywhere. Skips vault init, the context file, and the 18 step skills (those happen per-project on first run).",
+        help="Install the entry skill + agents into each harness's user-level dir (~/.claude/, ~/.omp/agent/, ~/.zcode/, ~/.pi/agent/) so the pipeline is available in every session anywhere. Skips vault init, the context file, and the 18 step skills (those happen per-project on first run).",
     ),
     steps_only: bool = typer.Option(
         False,
@@ -39,7 +39,7 @@ def install(
         None,
         "--harness",
         "-H",
-        help="Harnesses to install into: claude, omp, pi, or all (repeatable, comma-separated ok). Default: the vault's [harness] targets, else autodetected from the project and user config dirs. An explicit choice is persisted for later installs.",
+        help="Harnesses to install into: claude, omp, zcode, pi, or all (repeatable, comma-separated ok). Default: the vault's [harness] targets, else autodetected from the project and user config dirs. An explicit choice is persisted for later installs.",
     ),
     target: str = typer.Option(
         "claude",
